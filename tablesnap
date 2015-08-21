@@ -18,6 +18,9 @@ import grp
 import re
 import signal
 import StringIO
+import subprocess
+
+SRC_MD5_META='s3putsecure-md5'
 
 default_log = logging.getLogger('tablesnap')
 if os.environ.get('TABLESNAP_SYSLOG', False):
@@ -63,6 +66,8 @@ class UploadHandler(pyinotify.ProcessEvent):
                 with_index=True,
                 with_sse=False,
                 keyname_separator=None,
+                pgp=False,
+                pgp_tmp_dir=None,
                 log=default_log,
                 md5_on_start=False):
         self.key = key
@@ -72,12 +77,17 @@ class UploadHandler(pyinotify.ProcessEvent):
         self.prefix = prefix
         self.name = name or socket.getfqdn()
         self.keyname_separator = keyname_separator
+        self.pgp = pgp
+        self.pgp_tmp_dir = pgp_tmp_dir
         self.retries = default_retries
         self.log = log
         self.include = include
         self.with_index = with_index
         self.with_sse = with_sse
         self.md5_on_start = md5_on_start
+
+        if self.pgp and not os.path.exists(self.pgp_tmp_dir):
+                os.makedirs(self.pgp_tmp_dir)
 
         if max_size:
             self.max_size = max_size * 2**20
@@ -100,6 +110,7 @@ class UploadHandler(pyinotify.ProcessEvent):
                              pathname)
 
     def add_file(self, filename):
+        default_log.info("%s: %s", filename, self.include(filename))
         if self.include is None or (self.include is not None
                                     and self.include(filename)):
             self.fileq.put(filename)
@@ -162,13 +173,13 @@ class UploadHandler(pyinotify.ProcessEvent):
                              (keyname, self.retries, format_exc()))
             raise
 
-        if key.size != stat.st_size:
-            self.log.warning('ATTENTION: your source (%s) and target (%s) '
-                'sizes differ, you should take a look. As immutable files '
-                'never change, one must assume the local file got corrupted '
-                'and the right version is the one in S3. Will skip this file '
-                'to avoid future complications' % (filename, keyname, ))
-            return True
+        #if key.size != stat.st_size:
+        #    self.log.warning('ATTENTION: your source (%s) and target (%s) '
+        #        'sizes differ, you should take a look. As immutable files '
+        #        'never change, one must assume the local file got corrupted '
+        #        'and the right version is the one in S3. Will skip this file '
+        #        'to avoid future complications' % (filename, keyname, ))
+        #    return True
         else:
             if not self.md5_on_start:
                 # Don't bother computing MD5 at startup
@@ -190,7 +201,7 @@ class UploadHandler(pyinotify.ProcessEvent):
                 fp.close()
                 self.log.debug('Computed md5: %s' % (md5,))
 
-                meta = key.get_metadata('md5sum')
+                meta = key.get_metadata(SRC_MD5_META)
 
                 if meta:
                     self.log.debug('MD5 metadata comparison: %s == %s? : %s' %
@@ -205,7 +216,7 @@ class UploadHandler(pyinotify.ProcessEvent):
                         self.log.debug('Setting missing md5sum metadata for %s' %
                                       (keyname,))
                         key.set_metadata('md5sum', md5[0])
-        
+
                 if result:
                     self.log.info("Keyname %s already exists, skipping upload"
                                   % (keyname))
@@ -214,7 +225,7 @@ class UploadHandler(pyinotify.ProcessEvent):
                         'MD5 hashes differ, you should take a look. As immutable '
                         'files never change, one must assume the local file got '
                         'corrupted and the right version is the one in S3. Will '
-                        'skip this file to avoid future complications' % 
+                        'skip this file to avoid future complications' %
                         (filename, keyname, ))
 
                 return result
@@ -328,6 +339,17 @@ class UploadHandler(pyinotify.ProcessEvent):
 
             meta = json.dumps(meta)
 
+            if self.pgp:
+                tempfilename = self.pgp_tmp_dir + '/' + os.path.basename(filename)
+                subprocess.check_call(['gpg', '-e', '-q', '-z0', \
+                                       '-r ops@betable.com', \
+                                       '--trust-model', 'always', '-u', 'ops@betable.com', \
+                                       '-o', tempfilename, filename])
+
+            else:
+                tempfilename = filename
+
+
             for r in range(self.retries):
                 try:
                     self.log.debug('File size check: %s > %s ? : %s' %
@@ -335,14 +357,14 @@ class UploadHandler(pyinotify.ProcessEvent):
                         (stat.st_size > self.max_size),))
                     if stat.st_size > self.max_size:
                         self.log.info('Performing multipart upload for %s' %
-                                     (filename))
+                                     (tempfilename))
                         mp = bucket.initiate_multipart_upload(keyname,
-                            metadata={'stat': meta, 'md5sum': md5[0]},
+                            metadata={'stat': meta, SRC_MD5_META: md5[0]},
                             encrypt_key=self.with_sse)
                         part = 1
                         chunk = None
                         try:
-                            for chunk in self.split_sstable(filename):
+                            for chunk in self.split_sstable(tempfilename):
                                 self.log.debug('Uploading part #%d '
                                                '(size: %d)' %
                                                (part, chunk.len,))
@@ -365,14 +387,15 @@ class UploadHandler(pyinotify.ProcessEvent):
                         self.log.debug('Performing monolithic upload')
                         key = bucket.new_key(keyname)
                         key.set_metadata('stat', meta)
-                        key.set_metadata('md5sum', md5[0])
-                        key.set_contents_from_filename(filename, replace=True,
+                        key.set_metadata(SRC_MD5_META, md5[0])
+                        key.set_contents_from_filename(tempfilename, replace=True,
                                                        cb=progress, num_cb=1,
-                                                       md5=md5,
+                                                       #md5=md5,
                                                        encrypt_key=self.with_sse)
+                    os.remove(tempfilename)
                     break
                 except:
-                    if not os.path.exists(filename):
+                    if not os.path.exists(tempfilename):
                         # File was removed? Skip
                         return
 
@@ -460,6 +483,10 @@ def main():
         help='Separator for the keyname between name and path.')
     parser.add_argument('-t', '--threads', default=default_threads,
         help='Number of writer threads')
+    parser.add_argument('--pgp', action='store_true', default=False,
+        help='Pgp encrypt files before sending to S3')
+    parser.add_argument('--pgp-tmp-dir', default='/tmp/cassandra-pgp',
+        help='Temporary location of pgp encrypted sstables')
     parser.add_argument('-n', '--name',
         help='Use this name instead of the FQDN to identify the files from '
              'this host')
@@ -470,6 +497,7 @@ def main():
         choices=['IN_MOVED_TO', 'IN_CLOSE_WRITE'],
         help='Which events to listen on, can be specified multiple times. '
              'Values: IN_MOVED_TO (default), IN_CLOSE_WRITE')
+
 
     include_group = parser.add_mutually_exclusive_group()
     include_group.add_argument('-e', '--exclude', default=None,
@@ -514,6 +542,8 @@ def main():
                             with_index=(not args.without_index),
                             with_sse=args.with_sse,
                             keyname_separator=args.keyname_separator,
+                            pgp=args.pgp,
+                            pgp_tmp_dir=args.pgp_tmp_dir,
                             max_size=int(args.max_upload_size),
                             chunk_size=int(args.multipart_chunk_size),
                             md5_on_start=args.md5_on_start)
