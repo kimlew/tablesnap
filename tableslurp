@@ -75,6 +75,8 @@ class DownloadHandler(object):
         self.pgp = args.pgp
         self.pgp_tmp_dir = args.pgp_tmp_dir
         self.md5_on_start = args.md5_on_start
+        self.data_dir = args.data_dir
+        self.clean_data_dir = args.clean_data_dir
 
         if args.name:
             self.name = args.name
@@ -127,7 +129,7 @@ class DownloadHandler(object):
             raise LookupError('Cannot find anything to restore from %s:%s/%s' %
                 (bucket.name, self.prefix, self.index_file or ''))
 
-        self.fileset = filter(bool, key.get_contents_as_string().split('\n'))
+        self.fileset = set(filter(bool, key.get_contents_as_string().split('\n')))
 
         log.info('Fileset contains %d files to download' % (len(self.fileset)))
         k = bucket.get_key('%s/%s' % (self.prefix, self.fileset[0]))
@@ -305,6 +307,16 @@ class DownloadHandler(object):
 
         #Wait for everything to finish downloading
         self.queue.join()
+        log.info('Download complete.')
+        if self.clean_data_dir:
+            log.info('Begin cleaning of un-indexed data files.')
+            for root, dirnames, filenames in os.walk(self.data_dir):
+                for filename in filenames:
+                    if not filename in self.fileset:
+                        log.debug('Removing %s' % (filename,))
+                        os.remove(filename)
+            log.info('Cleaning of data directory complete.')
+
         log.info('My job is done.')
 
 
@@ -347,6 +359,11 @@ def main():
     parser.add_argument('--md5-on-start', default=False, action='store_true',
         help='If you want to compute *every file* for its MD5 checksum at '
              'start time, enable this option.')
+    parser.add_argument('--clean-data-dir', default=False, action='store_true',
+        help='Remove un-indexed files from the data directory')
+    parser.add_argument('--data-dir', default='/var/lib/cassandra/data',
+        help='Data directory where new files are downloaded and unnecessary'
+             ' files are removed')
     parser.add_argument('-n', '--name', default=socket.getfqdn(),
         help='Use this name instead of the FQDN to prefix the bucket dir')
     parser.add_argument('index_bucket', nargs=1,
