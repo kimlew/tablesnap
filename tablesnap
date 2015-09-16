@@ -341,7 +341,7 @@ class UploadHandler(pyinotify.ProcessEvent):
 
             if self.pgp:
                 tempfilename = self.pgp_tmp_dir + '/' + os.path.basename(filename)
-                subprocess.check_call(['gpg', '-e', '-q', '-z0', \
+                subprocess.check_call(['gpg', '--batch', '--yes', '-e', '-q', '-z0', \
                                        '-r ops@betable.com', \
                                        '--trust-model', 'always', '-u', 'ops@betable.com', \
                                        '-o', tempfilename, filename])
