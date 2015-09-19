@@ -123,7 +123,7 @@ class DownloadHandler(object):
         log.info('Have bucket')
         log.info(self.index_file)
         log.info(self.prefix)
-        key = bucket.get_key("%s%s" % (self.prefix, self.index_file))
+        key = bucket.get_key("%s/%s" % (self.prefix, self.index_file))
 
         if not key:
             raise LookupError('Cannot find anything to restore from %s:%s/%s' %
@@ -132,7 +132,8 @@ class DownloadHandler(object):
         self.fileset = set(filter(bool, key.get_contents_as_string().split('\n')))
 
         log.info('Fileset contains %d files to download' % (len(self.fileset)))
-        k = bucket.get_key('%s/%s' % (self.prefix, self.fileset[0]))
+        bucket = conn.get_bucket(self.backup_bucket)
+        k = bucket.get_key('%s%s' % (self.prefix, next(iter(self.fileset))))
 #       The librato branch introduced this
         meta = k.get_metadata('stat')
         log.debug('Metadata is %s' % (meta,))
