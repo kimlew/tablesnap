@@ -204,7 +204,7 @@ class DownloadHandler(object):
                             'files never change, one must assume the local file got '
                             'corrupted and the right version is the one in S3. Will '
                             'skip this file to avoid future complications' %
-                            (filename, keyname, ))
+                            (filename, bucket_key.name, ))
 
                     return result
                 else:
