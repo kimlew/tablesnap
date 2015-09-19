@@ -256,8 +256,8 @@ class DownloadHandler(object):
                             if self.pgp:
                                 log.info('Decrypting %s to %s' % (tempdestfile, fname))
                                 try:
-                                    subprocess.check_call(['gpg', '-d', '-q', \
-                                                       '--homedir', '/home/cassandra/.gnupg', \
+                                    subprocess.check_call(['gpg', '-d', '-q', '--batch', \
+                                                       '--homedir', '/var/lib/cassandra/.gnupg', \
                                                        '--use-agent', '-o', fname, tempdestfile])
                                 except Exception as e:
                                     log.critical(e)
