@@ -11,6 +11,7 @@ import logging.handlers
 import os.path
 import socket
 import json
+import functools
 import sys
 import os
 import pwd
@@ -518,7 +519,10 @@ def main():
 
     include_group = parser.add_mutually_exclusive_group()
     include_group.add_argument('-e', '--exclude', default=None,
-        help='Exclude files matching this regular expression from upload.'
+        help='Exclude files matching these regular expressions from upload.'
+             'Expressions are separated by semi-colon e.g. \'/snapshots/;-tmp\' '
+             'to eclude paths containing either \'/snapshots/\', or \'-tmp\', '
+             'or both. '
              'WARNING: If neither exclude nor include are defined, then all '
              'files matching "-tmp" are excluded.')
     include_group.add_argument('-i', '--include', default=None,
@@ -534,12 +538,14 @@ def main():
              'free memory if default is not available)' % default_chunk_size)
 
     args = parser.parse_args()
+    exclude_list = args.exclude.split(';')
 
     # For backwards-compatibility: If neither exclude nor include are set,
     # then include only files not matching '-tmp'. This was the default
     include = lambda path: path.find('-tmp') == -1
-    if args.exclude:
-        include = lambda path: not re.search(args.exclude, path)
+    if (args.exclude):
+        include = lambda path: not functools.reduce(lambda x,y: x or
+                re.search(y, path), exclude_list, False)
     if args.include:
         include = lambda path: not not re.search(args.include, path)
 
