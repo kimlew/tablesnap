@@ -225,10 +225,10 @@ class DownloadHandler(object):
             while queue.empty() == False:
                 queueddownload = queue.get()
                 fname = queueddownload.filename
-                keypath = '%s/%s' % (self.prefix, fname,)
+                keypath = '%s%s' % (self.prefix, fname,)
 
-                log.info(keypath)
-                log.info(fname)
+                log.debug(keypath)
+                log.debug(fname)
                 log.debug('Checking if we need to download %s to %s' %
                     (keypath, fname,))
 
