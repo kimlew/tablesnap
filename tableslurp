@@ -313,9 +313,10 @@ class DownloadHandler(object):
             log.info('Begin cleaning of un-indexed data files.')
             for root, dirnames, filenames in os.walk(self.data_dir):
                 for filename in filenames:
-                    if not filename in self.fileset:
-                        log.debug('Removing %s' % (filename,))
-                        os.remove(filename)
+                    filepath = root + os.sep + filename
+                    if not filepath in self.fileset:
+                        log.info('Removing %s' % (filepath,))
+                        os.remove(filepath)
             log.info('Cleaning of data directory complete.')
 
         log.info('My job is done.')
