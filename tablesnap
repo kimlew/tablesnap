@@ -5,17 +5,20 @@ import boto
 import argparse
 from traceback import format_exc
 from threading import Thread
+import threading
 from Queue import Queue
 import logging
+import sched
 import logging.handlers
 import os.path
 import socket
 import json
 import functools
 import sys
+import time
+import datetime
 import os
 import pwd
-import threading
 import grp
 import re
 import signal
@@ -59,6 +62,23 @@ default_chunk_size = 256
 
 # Default inotify event to listen on
 default_listen_event = 'IN_MOVED_TO'
+
+# Default inotify event to listen on
+max_gpg_attempts = 5
+
+scheduler = sched.scheduler(time.time, time.sleep)
+
+
+class UploadCounter(object):
+    filename = None
+    attemptcount = 0
+
+    def __init__(self, filename):
+        self.filename = filename
+
+    def increment(self):
+        self.attemptcount += 1
+
 
 class UploadHandler(pyinotify.ProcessEvent):
     def my_init(self, threads=None, key=None, secret=None, token=None,
@@ -117,11 +137,15 @@ class UploadHandler(pyinotify.ProcessEvent):
         return '%s%s%s%s' % (self.prefix, self.name, self.keyname_separator,
                              pathname)
 
+    def queue_put(item):
+        self.log.info("Putting")
+        self.fileq.put(item)
+
     def add_file(self, filename):
         default_log.info("%s: %s", filename, self.include(filename))
         if self.include is None or (self.include is not None
                                     and self.include(filename)):
-            self.fileq.put(filename)
+            self.fileq.put(UploadCounter(filename))
         else:
             self.log.info('Skipping %s due to exclusion rule' % filename)
 
@@ -136,15 +160,24 @@ class UploadHandler(pyinotify.ProcessEvent):
         bucket = self.get_bucket()
 
         while True:
-            f = self.fileq.get()
+            q_upload = self.fileq.get()
+            f = q_upload.filename
             keyname = self.build_keyname(f)
             try:
                 self.upload_sstable(bucket, keyname, f)
             except:
                 self.log.critical("Failed uploading %s. Aborting.\n%s" %
                              (f, format_exc()))
-                # Brute force kill self
-                os.kill(os.getpid(), signal.SIGKILL)
+                q_upload.increment()
+                if (q_upload.attemptcount > max_gpg_attempts):
+                    # Brute force kill self
+                    self.log.critical("Shutting down! beep - boop - beep")
+                    os.kill(os.getpid(), signal.SIGKILL)
+
+                sleep_secs = 60 * q_upload.attemptcount
+                self.log.info("Attempt to upload %s again in %s seconds" % (f, sleep_secs,))
+                scheduler.enter(sleep_secs, 1, lambda x,y: x.put(y), (self.fileq, q_upload,))
+                scheduler.run()
 
             self.fileq.task_done()
 
@@ -373,11 +406,13 @@ class UploadHandler(pyinotify.ProcessEvent):
                     self.log.debug('File size check: %s > %s ? : %s' %
                         (stat.st_size, self.max_size,
                         (stat.st_size > self.max_size),))
+                    last_used = str(datetime.date.today())
                     if stat.st_size > self.max_size:
                         self.log.info('Performing multipart upload for %s' %
                                      (tempfilename))
                         mp = bucket.initiate_multipart_upload(keyname,
-                            metadata={'stat': meta, SRC_MD5_META: md5[0]},
+                            metadata={'stat': meta, SRC_MD5_META: md5[0],
+                                      'last_used': last_used },
                             encrypt_key=self.with_sse)
                         part = 1
                         chunk = None
@@ -405,6 +440,7 @@ class UploadHandler(pyinotify.ProcessEvent):
                         self.log.debug('Performing monolithic upload')
                         key = bucket.new_key(keyname)
                         key.set_metadata('stat', meta)
+                        key.set_metadata('last_used', last_used)
                         key.set_metadata(SRC_MD5_META, md5[0])
                         key.set_contents_from_filename(tempfilename, replace=True,
                                                        cb=progress, num_cb=1,
