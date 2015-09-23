@@ -30,6 +30,7 @@ import socket
 import sys
 import signal
 import subprocess
+import re
 from Queue import Queue
 
 SRC_MD5_META='s3putsecure-md5'
@@ -238,8 +239,24 @@ class DownloadHandler(object):
                     try:
                         key = bucket.get_key(keypath)
                         if key == None:
-                            self.log.critical('Key %s does not exist' % (keypath,))
-                            raise
+                            '''
+                            Summary.db files are not mandatory to the restoration of cassandra.
+                            When the are present they can significantly speed up the boot up
+                            time of a cassandra instance. Cassandra will rebuild these files,
+                            if necessary, on reboot.
+                            For some reason `tablesnap` has trouble with these files, as though
+                            they are being removed before `tablesnap` can upload them.
+                            So if these files are missing, sucks, but we can ignore them.
+                            '''
+                            if (re.search(keypath, '-Summary.db')):
+                                log.info('Ignoring missing key `%s`' % (keypath,))
+                                #Pop the task
+                                queue.task_done()
+                                continue
+
+                            else:
+                                self.log.critical('Key %s does not exist' % (keypath,))
+                                raise
 
                         download = not self.file_exists(key, fname)
 
@@ -256,7 +273,7 @@ class DownloadHandler(object):
                             if self.pgp:
                                 log.info('Decrypting %s to %s' % (tempdestfile, fname))
                                 try:
-                                    subprocess.check_call(['gpg', '-d', '-q', '--batch', \
+                                    subprocess.check_call(['gpg', '-d', '-q', '--batch', '--yes', \
                                                        '--homedir', '/var/lib/cassandra/.gnupg', \
                                                        '--use-agent', '-o', fname, tempdestfile])
                                 except Exception as e:
