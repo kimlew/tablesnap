@@ -63,8 +63,8 @@ default_chunk_size = 256
 # Default inotify event to listen on
 default_listen_event = 'IN_MOVED_TO'
 
-# Default inotify event to listen on
-max_gpg_attempts = 5
+# max number of upload attempts
+max_upload_attempts = 5
 
 scheduler = sched.scheduler(time.time, time.sleep)
 
@@ -73,11 +73,18 @@ class UploadCounter(object):
     filename = None
     attemptcount = 0
 
-    def __init__(self, filename):
+    def __init__(self, filename, tmp_dir):
         self.filename = filename
+        self.hardname = tmp_dir + '/' + os.path.basename(filename)
+        default_log.debug('Creating hardlink from %s to %s' % (filename, self.hardname))
+        os.link(filename, self.hardname)
 
     def increment(self):
         self.attemptcount += 1
+
+    def done(self):
+        default_log.debug('Releasing hardlink %s' % self.hardname)
+        os.remove(self.hardname)
 
 
 class UploadHandler(pyinotify.ProcessEvent):
@@ -90,6 +97,7 @@ class UploadHandler(pyinotify.ProcessEvent):
                 keyname_separator=None,
                 pgp=False,
                 pgp_tmp_dir=None,
+                hardlink_tmp_dir=None,
                 log=default_log,
                 md5_on_start=False):
         self.key = key
@@ -101,6 +109,7 @@ class UploadHandler(pyinotify.ProcessEvent):
         self.keyname_separator = keyname_separator
         self.pgp = pgp
         self.pgp_tmp_dir = pgp_tmp_dir
+        self.hardlink_tmp_dir = hardlink_tmp_dir
         self.retries = default_retries
         self.log = log
         self.include = include
@@ -109,7 +118,7 @@ class UploadHandler(pyinotify.ProcessEvent):
         self.md5_on_start = md5_on_start
 
         if self.pgp and not os.path.exists(self.pgp_tmp_dir):
-                os.makedirs(self.pgp_tmp_dir)
+            os.makedirs(self.pgp_tmp_dir)
 
         if max_size:
             self.max_size = max_size * 2**20
@@ -145,7 +154,11 @@ class UploadHandler(pyinotify.ProcessEvent):
         default_log.info("%s: %s", filename, self.include(filename))
         if self.include is None or (self.include is not None
                                     and self.include(filename)):
-            self.fileq.put(UploadCounter(filename))
+            try:
+                self.fileq.put(UploadCounter(filename, self.hardlink_tmp_dir))
+            except Exception as e:
+                self.log.critical(e)
+                self.log.critical("Add file to queue failed: %s\n" % filename)
         else:
             self.log.info('Skipping %s due to exclusion rule' % filename)
 
@@ -161,21 +174,23 @@ class UploadHandler(pyinotify.ProcessEvent):
 
         while True:
             q_upload = self.fileq.get()
-            f = q_upload.filename
-            keyname = self.build_keyname(f)
+            f = q_upload.hardname
+            keyname = self.build_keyname(q_upload.filename)
             try:
                 self.upload_sstable(bucket, keyname, f)
+                q_upload.done()
             except:
-                self.log.critical("Failed uploading %s. Aborting.\n%s" %
-                             (f, format_exc()))
+                self.log.critical("Failed uploading %s. Hardlink %s. Aborting.\n%s" %
+                             (q_upload.filename, f, format_exc()))
                 q_upload.increment()
-                if (q_upload.attemptcount > max_gpg_attempts):
+                if (q_upload.attemptcount > max_upload_attempts):
                     # Brute force kill self
+                    q_upload.done()
                     self.log.critical("Shutting down! beep - boop - beep")
                     os.kill(os.getpid(), signal.SIGKILL)
 
                 sleep_secs = 60 * q_upload.attemptcount
-                self.log.info("Attempt to upload %s again in %s seconds" % (f, sleep_secs,))
+                self.log.info("Attempt to upload %s again in %s seconds" % (q_upload.filename, sleep_secs,))
                 scheduler.enter(sleep_secs, 1, lambda x,y: x.put(y), (self.fileq, q_upload,))
                 scheduler.run()
 
@@ -539,7 +554,9 @@ def main():
         help='Number of writer threads')
     parser.add_argument('--pgp', action='store_true', default=False,
         help='Pgp encrypt files before sending to S3')
-    parser.add_argument('--pgp-tmp-dir', default='/tmp/cassandra-pgp',
+    parser.add_argument('--pgp-tmp-dir', default='/tmp/tablesnap-pgp',
+        help='Temporary location of pgp encrypted sstables')
+    parser.add_argument('--hardlink-tmp-dir', default='/tmp/tablesnap-hardlinks',
         help='Temporary location of pgp encrypted sstables')
     parser.add_argument('-n', '--name',
         help='Use this name instead of the FQDN to identify the files from '
@@ -588,6 +605,12 @@ def main():
     # Check S3 credentials only. We reconnect per-thread to avoid any
     # potential thread-safety problems.
 
+    if (args.pgp):
+        default_log.info('Clearing pgp tmp dir %s' % args.pgp_tmp_dir)
+        map( os.unlink, [os.path.join(args.pgp_tmp_dir,f) for f in os.listdir(args.pgp_tmp_dir)] )
+    default_log.info('Clearing hardlink tmp dir %s' % args.hardlink_tmp_dir)
+    map( os.unlink, [os.path.join(args.hardlink_tmp_dir,f) for f in os.listdir(args.hardlink_tmp_dir)] )
+
     s3 = boto.connect_s3(aws_access_key_id=args.aws_key,
                          aws_secret_access_key=args.aws_secret,
                          security_token=args.aws_token)
@@ -603,6 +626,7 @@ def main():
                             keyname_separator=args.keyname_separator,
                             pgp=args.pgp,
                             pgp_tmp_dir=args.pgp_tmp_dir,
+                            hardlink_tmp_dir=args.hardlink_tmp_dir,
                             max_size=int(args.max_upload_size),
                             chunk_size=int(args.multipart_chunk_size),
                             md5_on_start=args.md5_on_start)
