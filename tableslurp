@@ -271,6 +271,12 @@ class DownloadHandler(object):
                             key.get_contents_to_filename(tempdestfile)
 
                             if self.pgp:
+                                path = os.path.dirname(fname)
+                                try:
+                                    os.makedirs(path)
+                                except OSError:
+                                    if not os.path.isdir(path):
+                                        raise
                                 log.info('Decrypting %s to %s' % (tempdestfile, fname))
                                 try:
                                     subprocess.check_call(['gpg', '-d', '-q', '--batch', '--yes', \
