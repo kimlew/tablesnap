@@ -1,0 +1,406 @@
+#!/var/lib/jenkins/jobs/tablesnap/workspace/src/git.ops.betable.com/tablesnap/env/bin/python
+#
+# -*- mode:python; sh-basic-offset:4; indent-tabs-mode:nil; coding:utf-8 -*-
+# vim:set tabstop=4 softtabstop=4 expandtab shiftwidth=4 fileencoding=utf-8:
+#
+# Copyright (c) 2012, Jorge A Gallegos <kad@blegh.net>
+#
+# Permission to use, copy, modify, and/or distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+import argparse
+import boto
+from dateutil import parser
+import grp
+import json
+import logging
+import threading
+import os
+import pwd
+import socket
+import sys
+import signal
+import subprocess
+import re
+from Queue import Queue
+
+SRC_MD5_META='s3putsecure-md5'
+
+log = logging.getLogger('tableslurp')
+stderr = logging.StreamHandler()
+stderr.setFormatter(logging.Formatter(
+    '%(name)s [%(asctime)s] %(levelname)s %(message)s'))
+log.addHandler(stderr)
+if os.environ.get('TDEBUG', False):
+    log.setLevel(logging.DEBUG)
+else:
+    log.setLevel(logging.INFO)
+
+
+class DownloadCounter(object):
+    filename = None
+    attemptcount = 0
+
+    def __init__(self, filename):
+        self.filename = filename
+
+    def increment(self):
+        self.attemptcount += 1
+
+
+class DownloadHandler(object):
+    fileset = []
+    queue = Queue()
+    num_threads = 4
+    threads = {}
+
+    def __init__(self, args):
+        self.preserve = args.preserve
+        self.key = args.aws_key
+        self.secret = args.aws_secret
+        self.token = args.token
+        self.index_bucket = args.index_bucket[0]
+        self.index_file = args.index_file[0]
+        self.backup_bucket = args.backup_bucket[0]
+        self.num_threads = args.threads
+        self.force = args.force
+        self.pgp = args.pgp
+        self.pgp_tmp_dir = args.pgp_tmp_dir
+        self.md5_on_start = args.md5_on_start
+        self.data_dir = args.data_dir
+        self.clean_data_dir = args.clean_data_dir
+
+        if args.name:
+            self.name = args.name
+        self.prefix = '%s:' % self.name
+
+        if self.pgp and not os.path.exists(self.pgp_tmp_dir):
+                os.makedirs(self.pgp_tmp_dir)
+
+#       It may be a bit sub-optimal, but I rather fail sooner than later
+        (owner, group) = self._build_file_set()
+        log.info("%s %s" % (owner, group))
+
+        if not self.preserve:
+            owner = args.owner
+            group = args.group
+
+        try:
+            self.owner = pwd.getpwnam(owner).pw_uid
+            self.group = grp.getgrnam(group).gr_gid
+        except Exception as e:
+            log.error(e)
+            raise OSError('User/Group pair %s:%s does not exist' %
+                (owner, group,))
+
+    def _get_bucket(self):
+#       unsure if boto is thread-safe, will reconnect every time
+        log.debug('Connecting to s3')
+        conn = boto.connect_s3(aws_access_key_id=self.key,
+                               aws_secret_access_key=self.secret,
+                               security_token=self.token)
+        bucket = conn.get_bucket(self.backup_bucket)
+        log.debug('Connected to s3')
+        return bucket
+
+    def _build_file_set(self):
+        log.info('Building fileset')
+        log.info('Connecting to s3')
+        conn = boto.connect_s3(aws_access_key_id=self.key,
+                               aws_secret_access_key=self.secret,
+                               security_token=self.token)
+        log.info('Connected to s3')
+        log.info(self.index_bucket)
+        bucket = conn.get_bucket(self.index_bucket)
+        log.info('Have bucket')
+        log.info(self.index_file)
+        log.info(self.prefix)
+        key = bucket.get_key("%s/%s" % (self.prefix, self.index_file))
+
+        if not key:
+            raise LookupError('Cannot find anything to restore from %s:%s/%s' %
+                (bucket.name, self.prefix, self.index_file or ''))
+
+        self.fileset = set(filter(bool, key.get_contents_as_string().split('\n')))
+
+        log.info('Fileset contains %d files to download' % (len(self.fileset)))
+        bucket = conn.get_bucket(self.backup_bucket)
+        k = bucket.get_key('%s%s' % (self.prefix, next(iter(self.fileset))))
+#       The librato branch introduced this
+        meta = k.get_metadata('stat')
+        log.debug('Metadata is %s' % (meta,))
+        owner = None
+        group = None
+        if meta:
+            try:
+                json_data = json.loads(meta)
+                owner = json_data['user']
+                group = json_data['group']
+            except TypeError as te:
+                log.debug(te)
+                log.warning('Could not parse stat metadata for %s' % (k.name,))
+            except KeyError as ke:
+                log.debug(ke)
+                log.warning('Incomplete stat metadata for %s, will ignore' %
+                    (k.name,))
+        return (owner, group)
+
+    def _test_permissions(self):
+        return
+        log.info('Will now try to test writing to the target dir %s' %
+            (self.target,))
+        try:
+
+            if os.path.isdir(self.target) == False:
+                log.debug('Creating temp file in %s' % (self.target,))
+                os.makedirs(self.target)
+            log.debug('Changing owner:group for %s to %s:%s' %
+                (self.target, self.owner, self.group,))
+
+            os.chown(self.target, self.owner, self.group)
+        except Exception as e:
+            log.debug(e)
+            log.exception('%s exists' % (self.target,))
+        log.info('Will write to %s' % (self.target,))
+
+    def file_exists(self, bucket_key, filename):
+        if os.path.isfile(filename):
+            # Compute MD5 sum of file
+            if self.md5_on_start:
+                try:
+                    fp = open(filename, "r")
+                except IOError as (errno, strerror):
+                    if errno == 2:
+                        # The file was removed, return False to download this file.
+                        return False
+
+                    log.critical("Failed to open file: %s (%s)\n%s" %
+                                 (filename, strerror, format_exc(),))
+                    raise
+
+                md5 = bucket_key.compute_md5(fp)
+                fp.close()
+                log.debug('Computed md5: %s' % (md5,))
+
+                meta = bucket_key.get_metadata(SRC_MD5_META)
+                if meta:
+                    log.debug('MD5 metadata comparison: %s == %s? : %s' %
+                                  (md5[0], meta, (md5[0] == meta)))
+                    result = (md5[0] == meta)
+
+                    if result:
+                        log.info("Keyname %s already exists, skipping download"
+                                      % (filename))
+                    else:
+                        log.warning('ATTENTION: your source (%s) and target (%s) '
+                            'MD5 hashes differ, you should take a look. As immutable '
+                            'files never change, one must assume the local file got '
+                            'corrupted and the right version is the one in S3. Will '
+                            'skip this file to avoid future complications' %
+                            (filename, bucket_key.name, ))
+
+                    return result
+                else:
+                    log.info('Meta data not available for key %s; download file' % filename)
+                    return False
+            else:
+                log.debug('Skip MD5 comparison for key: %s' % filename)
+                return True
+        else:
+            return False
+
+    def _worker(self, idx, queue):
+        log.info('Thread #%d processing items' % (idx, ))
+        bucket = self._get_bucket()
+
+        try:
+            while queue.empty() == False:
+                queueddownload = queue.get()
+                fname = queueddownload.filename
+                keypath = '%s%s' % (self.prefix, fname,)
+
+                log.debug(keypath)
+                log.debug(fname)
+                log.debug('Checking if we need to download %s to %s' %
+                    (keypath, fname,))
+
+                if queueddownload.attemptcount < 5:
+                    download = False
+                    #Retry downloading until we succeed
+                    try:
+                        key = bucket.get_key(keypath)
+                        if key == None:
+                            '''
+                            Summary.db files are not mandatory to the restoration of cassandra.
+                            When the are present they can significantly speed up the boot up
+                            time of a cassandra instance. Cassandra will rebuild these files,
+                            if necessary, on reboot.
+                            For some reason `tablesnap` has trouble with these files, as though
+                            they are being removed before `tablesnap` can upload them.
+                            So if these files are missing, sucks, but we can ignore them.
+                            '''
+                            if (re.search(keypath, '-Summary.db')):
+                                log.info('Ignoring missing key `%s`' % (keypath,))
+                                #Pop the task
+                                queue.task_done()
+                                continue
+
+                            else:
+                                self.log.critical('Key %s does not exist' % (keypath,))
+                                raise
+
+                        download = not self.file_exists(key, fname)
+
+                        if download and key:
+                            if self.pgp:
+                                tempdestfile = self.pgp_tmp_dir + '/' + os.path.basename(fname)
+                            else:
+                                tempdestfile = fname
+
+                            log.info('Downloading %s from %s to %s' %
+                                (key.name, bucket.name, tempdestfile))
+                            key.get_contents_to_filename(tempdestfile)
+
+                            if self.pgp:
+                                path = os.path.dirname(fname)
+                                try:
+                                    os.makedirs(path)
+                                except OSError:
+                                    if not os.path.isdir(path):
+                                        raise
+                                log.info('Decrypting %s to %s' % (tempdestfile, fname))
+                                try:
+                                    subprocess.check_call(['gpg', '-d', '-q', '--batch', '--yes', \
+                                                       '--homedir', '/var/lib/cassandra/.gnupg', \
+                                                       '--use-agent', '-o', fname, tempdestfile])
+                                except Exception as e:
+                                    log.critical(e)
+                                    log.exception('Failed to decrypt `%s`, stopping thread #%d' %
+                                        (tempdestfile, idx))
+                                    # Brute force kill self
+                                    os.kill(os.getpid(), signal.SIGKILL)
+
+                                os.remove(tempdestfile)
+
+                    except Exception as e:
+                        log.debug(e)
+                        log.exception('Failed to download `%s` retrying' %
+                            (fname,))
+                        #We can't download, try again
+                        queueddownload.increment()
+                        queue.put(queueddownload)
+
+                else:
+                    log.info('Tried to download %s too many times.  Giving up' %
+                        fname)
+
+                #Pop the task regardless of state.  If it fails we've put it back
+                queue.task_done()
+        except:
+            os.kill(os.getpid(), signal.SIGKILL)
+
+        log.info('Thread #%d finished processing' % (idx,))
+
+    def run(self):
+        self._test_permissions()
+        log.info('Running')
+
+        #queue up the filesets
+        for filename in self.fileset:
+            log.info('Pushing file %s onto queue' % filename)
+            self.queue.put(DownloadCounter(filename))
+
+#       launch threads and attach an event to them
+        for idx in range(0, self.num_threads):
+            self.threads[idx] = {}
+#            e = threading.Event()
+            t = threading.Thread(target=self._worker,
+                kwargs={'idx': idx, 'queue': self.queue})
+            t.setDaemon(True)
+            self.threads[idx] = t
+            t.start()
+
+        #Wait for everything to finish downloading
+        self.queue.join()
+        log.info('Download complete.')
+        if self.clean_data_dir:
+            log.info('Begin cleaning of un-indexed data files.')
+            for root, dirnames, filenames in os.walk(self.data_dir):
+                for filename in filenames:
+                    filepath = root + os.sep + filename
+                    if not filepath in self.fileset:
+                        log.info('Removing %s' % (filepath,))
+                        os.remove(filepath)
+            log.info('Cleaning of data directory complete.')
+
+        log.info('My job is done.')
+
+
+def main():
+    p = pwd.getpwnam(os.environ['USER'])
+    owner = p.pw_name
+    group = [_.gr_name for _ in grp.getgrall() if _.gr_gid == p.pw_gid][0]
+    parser = argparse.ArgumentParser(
+        description='This is the companion script to the `tablesnap` program '
+        'which you can use to restore files from an Amazon S3 bucket to any '
+        'given local directory which you have write-permissions on. While the '
+        'code is straightforward, the program assumes the files you are '
+        'restoring got previously backed up with `tablesnap`',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('-k', '--aws-key',
+        default=os.environ.get('AWS_ACCESS_KEY_ID'),
+        help='Amazon S3 Key (default from AWS_ACCESS_KEY_ID in environment)')
+    parser.add_argument('-s', '--aws-secret',
+        default=os.environ.get('AWS_SECRET_ACCESS_KEY'),
+        help='Amazon S3 Secret (default from AWS_SECRET_ACCESS_KEY in environment)')
+    parser.add_argument('--token',
+        default=os.environ.get('AWS_SECURITY_TOKEN'),
+        help='Amazon S3 Token (default from AWS_SECURITY_TOKEN in environment)')
+    parser.add_argument('-p', '--preserve', default=False, action='store_true',
+        help='Preserve the permissions (if they exist) from the source. '
+        'This overrides -o and -g')
+    parser.add_argument('-o', '--owner', default=owner,
+        help='After download, chown files to this user.')
+    parser.add_argument('-g', '--group', default=group,
+        help='After download, chgrp files to this group.')
+    parser.add_argument('-t', '--threads', type=int, default=4,
+        help='Split the download between this many threads')
+    parser.add_argument('--force', default=False, action='store_true',
+        help='Force download files even if they exist')
+    parser.add_argument('--pgp', action='store_true', default=False,
+        help='Pgp decrypt files before storing')
+    parser.add_argument('--pgp-tmp-dir', default='/tmp/cassandra-gpg',
+        help='Temporary directory to store slurped files before '
+        'decryption and movement to final location')
+    parser.add_argument('--md5-on-start', default=False, action='store_true',
+        help='If you want to compute *every file* for its MD5 checksum at '
+             'start time, enable this option.')
+    parser.add_argument('--clean-data-dir', default=False, action='store_true',
+        help='Remove un-indexed files from the data directory')
+    parser.add_argument('--data-dir', default='/var/lib/cassandra/data',
+        help='Data directory where new files are downloaded and unnecessary'
+             ' files are removed')
+    parser.add_argument('-n', '--name', default=socket.getfqdn(),
+        help='Use this name instead of the FQDN to prefix the bucket dir')
+    parser.add_argument('index_bucket', nargs=1,
+        help='S3 bucket to download index files from')
+    parser.add_argument('index_file', nargs=1,
+        help='name of the index file to download')
+    parser.add_argument('backup_bucket', nargs=1,
+        help='S3 bucket to download backups from')
+    args = parser.parse_args()
+
+    dh = DownloadHandler(args)
+    dh.run()
+
+if __name__ == '__main__':
+    sys.exit(main())
