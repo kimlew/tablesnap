@@ -1,8 +1,8 @@
 rebuild: build
-	virtualenv "./env"
+	virtualenv "./virtualenv"
 
 build:
-	virtualenv ./env
-	./env/bin/pip install -r ./requirements.txt
-	./env/bin/python setup.py install
-	virtualenv --relocatable env
+	virtualenv ./virtualenv
+	./virtualenv/bin/pip install -r ./requirements.txt
+	./virtualenv/bin/python setup.py install
+	virtualenv --relocatable virtualenv
