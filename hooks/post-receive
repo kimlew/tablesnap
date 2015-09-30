@@ -1,0 +1,6 @@
+#!/bin/sh
+# Commented, b/c for the time being we dont want tablesnap restarting on deploy
+#set -e
+#
+#sudo service tablesnap stop
+#sudo service tablesnap start
