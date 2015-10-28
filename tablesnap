@@ -602,14 +602,22 @@ def main():
     if args.include:
         include = lambda path: not not re.search(args.include, path)
 
+    # Clear/Create tmp directories
+    if (args.pgp):
+        if (os.path.exists(args.pgp_tmp_dir)):
+            default_log.info('Clearing pgp tmp dir %s' % args.pgp_tmp_dir)
+            map( os.unlink, [os.path.join(args.pgp_tmp_dir,f) for f in os.listdir(args.pgp_tmp_dir)] )
+        else:
+            os.makedirs(args.pgp_tmp_dir)
+
+    if (os.path.exists(args.hardlink_tmp_dir)):
+        default_log.info('Clearing hardlink tmp dir %s' % args.hardlink_tmp_dir)
+        map( os.unlink, [os.path.join(args.hardlink_tmp_dir,f) for f in os.listdir(args.hardlink_tmp_dir)] )
+    else:
+        os.makedirs(args.hardlink_tmp_dir)
+
     # Check S3 credentials only. We reconnect per-thread to avoid any
     # potential thread-safety problems.
-
-    if (args.pgp):
-        default_log.info('Clearing pgp tmp dir %s' % args.pgp_tmp_dir)
-        map( os.unlink, [os.path.join(args.pgp_tmp_dir,f) for f in os.listdir(args.pgp_tmp_dir)] )
-    default_log.info('Clearing hardlink tmp dir %s' % args.hardlink_tmp_dir)
-    map( os.unlink, [os.path.join(args.hardlink_tmp_dir,f) for f in os.listdir(args.hardlink_tmp_dir)] )
 
     s3 = boto.connect_s3(aws_access_key_id=args.aws_key,
                          aws_secret_access_key=args.aws_secret,
