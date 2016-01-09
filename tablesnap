@@ -337,26 +337,32 @@ class UploadHandler(pyinotify.ProcessEvent):
             self.log.critical("Stat file failed: %s\n" % filename)
             return
 
+        # If the key exists, and the storage class is `STANDARD` then return
+        # Otherwise, upload or re-upload the key
         if self.key_exists(bucket, keyname, filename, stat):
+            key = bucket.get_key(keyname)
+            if key.storage_class == 'STANDARD':
+                return
+            else:
+                self.log.debug('Converting storage class from "%s" to "STANDARD" for key %s' % (key.storage_class, filename))
+
+        try:
+            fp = open(filename, 'rb')
+        except IOError as (errno, strerror):
+            if errno == 2:
+                # The file was removed, return True to skip this file.
+                return True
+
+            self.log.critical("Failed to open file: %s (%s)\n%s" %
+                             (filename, strerror, format_exc(),))
             return
-        else:
-            try:
-                fp = open(filename, 'rb')
-            except IOError as (errno, strerror):
-                if errno == 2:
-                    # The file was removed, return True to skip this file.
-                    return True
 
-                self.log.critical("Failed to open file: %s (%s)\n%s" %
-                                 (filename, strerror, format_exc(),))
-                return
-
-            except IOError:
-                # File removed?
-                return
-            md5 = boto.utils.compute_md5(fp)
-            self.log.debug('Computed md5sum before upload is: %s' % (md5,))
-            fp.close()
+        except IOError:
+            # File removed?
+            return
+        md5 = boto.utils.compute_md5(fp)
+        self.log.debug('Computed md5sum before upload is: %s' % (md5,))
+        fp.close()
 
         def progress(sent, total):
             if sent == total:
