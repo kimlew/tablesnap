@@ -1,0 +1,89 @@
+#!/usr/bin/env python
+
+import argparse
+import boto
+from datetime import datetime
+import logging
+import os
+import sys
+
+
+log = logging.getLogger('tablesnap-sunset')
+stderr = logging.StreamHandler()
+stderr.setFormatter(logging.Formatter(
+    '%(name)s [%(asctime)s] %(levelname)s %(message)s'))
+log.addHandler(stderr)
+if os.environ.get('TDEBUG', False):
+    log.setLevel(logging.DEBUG)
+else:
+    log.setLevel(logging.INFO)
+
+
+class SunsetHandler(object):
+
+    def __init__(self, args):
+        self.key = args.aws_key
+        self.secret = args.aws_secret
+        self.token = args.aws_token
+        self.prefix = args.prefix
+        self.bucket_name = args.bucket
+        self.sunset_bucket_name = args.sunset_bucket
+
+        self.get_buckets()
+
+
+    def get_buckets(self):
+        log.info('Connecting to s3')
+        conn = boto.connect_s3(aws_access_key_id=self.key,
+                               aws_secret_access_key=self.secret,
+                               security_token=self.token)
+        log.info('Connected to s3')
+        self.bucket = conn.get_bucket(self.bucket_name)
+        log.info('Have backup bucket')
+        self.sunset_bucket = conn.get_bucket(self.sunset_bucket_name)
+        log.info('Have sunset bucket')
+
+
+    def run(self):
+        count = 0
+
+        for key in self.bucket.list(prefix=self.prefix):
+            count += 1
+            if (count % 1000 == 0):
+                log.info('Iterated over %s keys' % (count))
+            filename = key.name.split(':')[1]
+            if not os.path.isfile(filename):
+                age = datetime.utcnow() - datetime.strptime(key.last_modified, '%Y-%m-%dT%H:%M:%S.%fZ')
+                if age.days > 30:
+                    log.info('Moving key %s to sunset bucket' % (key.name))
+                    self.sunset_bucket.copy_key(key.name, self.bucket_name, key.name)
+                    key.delete()
+
+
+def main():
+    parser = argparse.ArgumentParser(description='tablesnap_sunset is a script that '
+        'iterates over all files in an s3 bucket and moves files to cheaper longer term '
+        'storage options given some meta-data conditions have been met.'
+        'e.g. File is no longer being used by C* on local file system, File was uploaded '
+        'more than X days ago, etc.')
+    parser.add_argument('-k', '--aws-key',
+        default=os.environ.get('AWS_ACCESS_KEY_ID'),
+        help='Amazon S3 Key (default from AWS_ACCESS_KEY_ID in environment)')
+    parser.add_argument('-s', '--aws-secret',
+        default=os.environ.get('AWS_SECRET_ACCESS_KEY'),
+        help='Amazon S3 Secret (default from AWS_SECRET_ACCESS_KEY in environment)')
+    parser.add_argument('--aws-token',
+        default=os.environ.get('AWS_SECURITY_TOKEN'),
+        help='Amazon S3 Token (default from AWS_SECURITY_TOKEN in environment)')
+    parser.add_argument('prefix', help='prefix to key path within bucket, e.g. `production/prodcassandra01:')
+    parser.add_argument('bucket', help='S3 bucket containing backup sstables')
+    parser.add_argument('sunset_bucket',
+        help='S3 bucket where old, unused files are taken before they die')
+
+    args = parser.parse_args()
+
+    sh = SunsetHandler(args)
+    sh.run()
+
+if __name__ == '__main__':
+    sys.exit(main())
