@@ -77,6 +77,7 @@ def main():
         default=os.environ.get('AWS_SECURITY_TOKEN'),
         help='Amazon S3 Token (default from AWS_SECURITY_TOKEN in environment)')
     parser.add_argument('--transition-age',
+        type=int,
         default=7,
         help='# of days after which the file can be moved to the sunset bucket, '
              'assuming it has been deleted from the local filesystem')
