@@ -28,6 +28,7 @@ class SunsetHandler(object):
         self.prefix = args.prefix
         self.bucket_name = args.bucket
         self.sunset_bucket_name = args.sunset_bucket
+        self.transition_age = args.transition_age
 
         self.get_buckets()
 
@@ -54,7 +55,7 @@ class SunsetHandler(object):
             filename = key.name.split(':')[1]
             if not os.path.isfile(filename):
                 age = datetime.utcnow() - datetime.strptime(key.last_modified, '%Y-%m-%dT%H:%M:%S.%fZ')
-                if age.days > 30:
+                if age.days > self.transition_age:
                     log.info('Moving key %s to sunset bucket' % (key.name))
                     self.sunset_bucket.copy_key(key.name, self.bucket_name, key.name)
                     key.delete()
@@ -75,6 +76,11 @@ def main():
     parser.add_argument('--aws-token',
         default=os.environ.get('AWS_SECURITY_TOKEN'),
         help='Amazon S3 Token (default from AWS_SECURITY_TOKEN in environment)')
+    parser.add_argument('--transition-age',
+        default=7,
+        help='# of days after which the file can be moved to the sunset bucket, '
+             'assuming it has been deleted from the local filesystem')
+
     parser.add_argument('prefix', help='prefix to key path within bucket, e.g. `production/prodcassandra01:')
     parser.add_argument('bucket', help='S3 bucket containing backup sstables')
     parser.add_argument('sunset_bucket',
