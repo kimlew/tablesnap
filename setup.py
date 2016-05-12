@@ -12,9 +12,11 @@ setup(
         'tablechop'
     ],
     install_requires=[
-        'pyinotify',
-        'boto>=2.6.0',
         'argparse',
+        'boto>=2.6.0',
+        'graphitesend',
+        'pyinotify',
         'python-dateutil',
+        'six',
     ],
 )
