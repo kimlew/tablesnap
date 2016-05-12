@@ -1,4 +1,4 @@
-rebuild: build
+rebuild:
 	virtualenv "./virtualenv"
 
 build:
