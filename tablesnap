@@ -155,7 +155,7 @@ class UploadHandler(pyinotify.ProcessEvent):
             self.gclient = get_graphite_client()
 
             def send_metrics_to_graphite():
-                t = threading.Timer(10.0, send_metrics_to_graphite).start()
+                t = threading.Timer(10.0, send_metrics_to_graphite)
                 t.daemon = True
                 t.start()
                 try:
