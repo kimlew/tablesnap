@@ -137,7 +137,9 @@ class UploadHandler(pyinotify.ProcessEvent):
             t.start()
 
         def log_queue_size():
-            threading.Timer(20.0, log_queue_size).start()
+            t = threading.Timer(20.0, log_queue_size)
+            t.daemon = True
+            t.start()
             self.log.info('Upload Queue size: %d' % self.fileq.qsize())
 
         log_queue_size()
@@ -153,7 +155,9 @@ class UploadHandler(pyinotify.ProcessEvent):
             self.gclient = get_graphite_client()
 
             def send_metrics_to_graphite():
-                threading.Timer(10.0, send_metrics_to_graphite).start()
+                t = threading.Timer(10.0, send_metrics_to_graphite).start()
+                t.daemon = True
+                t.start()
                 try:
                     self.gclient.send('upload_queue_size', self.fileq.qsize())
                 except:
@@ -616,71 +620,76 @@ def main():
         help='Chunk size for multipart uploads (default: %dM or 10%%%% of '
              'free memory if default is not available)' % default_chunk_size)
 
-    args = parser.parse_args()
+    try:
+        args = parser.parse_args()
 
-    # For backwards-compatibility: If neither exclude nor include are set,
-    # then include only files not matching '-tmp'. This was the default
-    include = lambda path: path.find('-tmp') == -1
-    if (args.exclude):
-        exclude_list = args.exclude.split(';')
-        include = lambda path: not functools.reduce(lambda x,y: x or
-                re.search(y, path), exclude_list, False)
-    if args.include:
-        include = lambda path: not not re.search(args.include, path)
+        # For backwards-compatibility: If neither exclude nor include are set,
+        # then include only files not matching '-tmp'. This was the default
+        include = lambda path: path.find('-tmp') == -1
+        if (args.exclude):
+            exclude_list = args.exclude.split(';')
+            include = lambda path: not functools.reduce(lambda x,y: x or
+                    re.search(y, path), exclude_list, False)
+        if args.include:
+            include = lambda path: not not re.search(args.include, path)
 
-    # Clear/Create tmp directories
-    if (args.pgp):
-        if (os.path.exists(args.pgp_tmp_dir)):
-            default_log.info('Clearing pgp tmp dir %s' % args.pgp_tmp_dir)
-            map( os.unlink, [os.path.join(args.pgp_tmp_dir,f) for f in os.listdir(args.pgp_tmp_dir)] )
+        # Clear/Create tmp directories
+        if (args.pgp):
+            if (os.path.exists(args.pgp_tmp_dir)):
+                default_log.info('Clearing pgp tmp dir %s' % args.pgp_tmp_dir)
+                map( os.unlink, [os.path.join(args.pgp_tmp_dir,f) for f in os.listdir(args.pgp_tmp_dir)] )
+            else:
+                os.makedirs(args.pgp_tmp_dir)
+
+        if (os.path.exists(args.hardlink_tmp_dir)):
+            default_log.info('Clearing hardlink tmp dir %s' % args.hardlink_tmp_dir)
+            map( os.unlink, [os.path.join(args.hardlink_tmp_dir,f) for f in os.listdir(args.hardlink_tmp_dir)] )
         else:
-            os.makedirs(args.pgp_tmp_dir)
+            os.makedirs(args.hardlink_tmp_dir)
 
-    if (os.path.exists(args.hardlink_tmp_dir)):
-        default_log.info('Clearing hardlink tmp dir %s' % args.hardlink_tmp_dir)
-        map( os.unlink, [os.path.join(args.hardlink_tmp_dir,f) for f in os.listdir(args.hardlink_tmp_dir)] )
-    else:
-        os.makedirs(args.hardlink_tmp_dir)
+        # Check S3 credentials only. We reconnect per-thread to avoid any
+        # potential thread-safety problems.
 
-    # Check S3 credentials only. We reconnect per-thread to avoid any
-    # potential thread-safety problems.
+        s3 = boto.connect_s3(aws_access_key_id=args.aws_key,
+                             aws_secret_access_key=args.aws_secret,
+                             security_token=args.aws_token)
+        bucket = s3.get_bucket(args.bucket)
 
-    s3 = boto.connect_s3(aws_access_key_id=args.aws_key,
-                         aws_secret_access_key=args.aws_secret,
-                         security_token=args.aws_token)
-    bucket = s3.get_bucket(args.bucket)
+        handler = UploadHandler(threads=args.threads, key=args.aws_key,
+                                secret=args.aws_secret, token=args.aws_token,
+                                bucket_name=bucket,
+                                prefix=args.prefix, name=args.name,
+                                include=include,
+                                with_index=(not args.without_index),
+                                with_sse=args.with_sse,
+                                keyname_separator=args.keyname_separator,
+                                pgp=args.pgp,
+                                pgp_tmp_dir=args.pgp_tmp_dir,
+                                hardlink_tmp_dir=args.hardlink_tmp_dir,
+                                max_size=int(args.max_upload_size),
+                                chunk_size=int(args.multipart_chunk_size),
+                                md5_on_start=args.md5_on_start)
 
-    handler = UploadHandler(threads=args.threads, key=args.aws_key,
-                            secret=args.aws_secret, token=args.aws_token,
-                            bucket_name=bucket,
-                            prefix=args.prefix, name=args.name,
-                            include=include,
-                            with_index=(not args.without_index),
-                            with_sse=args.with_sse,
-                            keyname_separator=args.keyname_separator,
-                            pgp=args.pgp,
-                            pgp_tmp_dir=args.pgp_tmp_dir,
-                            hardlink_tmp_dir=args.hardlink_tmp_dir,
-                            max_size=int(args.max_upload_size),
-                            chunk_size=int(args.multipart_chunk_size),
-                            md5_on_start=args.md5_on_start)
+        wm = pyinotify.WatchManager()
+        notifier = pyinotify.Notifier(wm, handler)
 
-    wm = pyinotify.WatchManager()
-    notifier = pyinotify.Notifier(wm, handler)
+        mask = get_mask(args.listen_events)
+        for path in args.paths:
+            ret = wm.add_watch(path, mask, rec=args.recursive,
+                               auto_add=args.auto_add)
+            if ret[path] == -1:
+                default_log.critical('add_watch failed for %s, bailing out!' %
+                                    (path))
+                return 1
 
-    mask = get_mask(args.listen_events)
-    for path in args.paths:
-        ret = wm.add_watch(path, mask, rec=args.recursive,
-                           auto_add=args.auto_add)
-        if ret[path] == -1:
-            default_log.critical('add_watch failed for %s, bailing out!' %
-                                (path))
-            return 1
+        if args.backup:
+            backup_files(handler, args.paths, args.recursive, include)
 
-    if args.backup:
-        backup_files(handler, args.paths, args.recursive, include)
+        notifier.loop()
 
-    notifier.loop()
+    except Exception, err:
+        default_log.critical(format_exc())
+        sys.exit()
 
 if __name__ == '__main__':
     sys.exit(main())
