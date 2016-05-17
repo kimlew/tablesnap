@@ -1,0 +1,287 @@
+#!/usr/bin/env python
+#
+# -*- mode:python; sh-basic-offset:4; indent-tabs-mode:nil; coding:utf-8 -*-
+# vim:set tabstop=4 softtabstop=4 expandtab shiftwidth=4 fileencoding=utf-8:
+#
+# Copyright (c) 2015, Max Furman <max@betable.com>
+#
+# Permission to use, copy, modify, and/or distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+import argparse
+import boto
+import time
+import subprocess
+import os
+import sys
+import signal
+import socket
+import logging
+import threading
+import re
+from Queue import Queue
+
+log = logging.getLogger('tablesnap-syncer')
+stderr = logging.StreamHandler()
+stderr.setFormatter(logging.Formatter(
+    '%(name)s [%(asctime)s] %(levelname)s %(message)s'))
+log.addHandler(stderr)
+if os.environ.get('TDEBUG', False):
+    log.setLevel(logging.DEBUG)
+else:
+    log.setLevel(logging.INFO)
+
+# Default number of writer threads
+default_threads = 4
+
+# Default retries
+default_retries = 1
+
+# Max file size to upload without doing multipart in MB
+max_file_size = 5120
+
+# Max file size to upload without doing multipart in B
+max_size = max_file_size * (2**20)
+
+# Default chunk size for multipart uploads in B
+chunk_size = 1000000000
+
+
+class SyncCounter(object):
+    filename = None
+    attemptcount = 0
+
+    def __init__(self, filename):
+        self.filename = filename
+
+    def increment(self):
+        self.attemptcount += 1
+
+
+
+class SyncHandler(object):
+    fileset = []
+    queue = Queue()
+    num_threads = 4
+    threads = {}
+
+    def __init__(self, args):
+        self.key = args.aws_key
+        self.secret = args.aws_secret
+        self.token = args.token
+        self.index_file = args.index_file[0]
+        self.backup_bucket = args.backup_bucket[0]
+        self.index_bucket = args.index_bucket[0]
+        self.num_threads = int(args.threads)
+        self.copy_in_place = args.copy_in_place
+
+        if args.name:
+            self.name = args.name
+        self.prefix = '%s:' % self.name
+
+    def _get_bucket(self):
+#       unsure if boto is thread-safe, will reconnect every time
+        log.info('Connecting to s3')
+        try:
+            conn = boto.connect_s3(aws_access_key_id=self.key,
+                                   aws_secret_access_key=self.secret,
+                                   security_token=self.token)
+            bucket = conn.get_bucket(self.backup_bucket)
+        except Exception:
+            raise
+        log.info('Connected to s3')
+        return bucket
+
+    def _build_file_set(self):
+        log.info('Building fileset')
+        log.info('Connecting to s3')
+        conn = boto.connect_s3(aws_access_key_id=self.key,
+                               aws_secret_access_key=self.secret,
+                               security_token=self.token)
+        log.info('Connected to s3')
+        log.info(self.index_bucket)
+        bucket = conn.get_bucket(self.index_bucket)
+        log.info('Have index bucket')
+        log.info(self.index_file)
+        log.info(self.prefix)
+        key = bucket.get_key("%s/%s" % (self.prefix, self.index_file))
+
+        if not key:
+            raise LookupError('Cannot find anything to restore from %s:%s/%s' %
+                (bucket.name, self.prefix, self.index_file or ''))
+
+        self.fileset = set(filter(bool, key.get_contents_as_string().split('\n')))
+
+        log.info('Fileset contains %d files to download' % (len(self.fileset)))
+
+    def _worker(self, idx, queue):
+        log.info('Thread #%d processing items' % (idx, ))
+        bucket = self._get_bucket()
+        log.info('Have bucket')
+        log.info(idx)
+
+        try:
+            while queue.empty() == False:
+                q_sync = queue.get()
+                fname = q_sync.filename.strip()
+                keypath = '%s%s' % (self.prefix, fname,)
+
+                try:
+                    key = bucket.get_key(keypath.strip())
+                    if (key == None):
+                        log.critical('wk %d: Key %s does not exist (yet)' % (idx, keypath))
+                        raise
+
+                    if self.copy_in_place:
+                        key_size = key.size
+                        log.debug('File size check: %s > %s ? : %s' %
+                            (key_size, max_size,
+                            (key_size > max_size),))
+                        if key_size > max_size:
+                            log.info('Performing multipart copy for `%s`' %
+                                         (keypath))
+                            metadata = key.metadata
+                            mpu = bucket.initiate_multipart_upload(keypath,
+                                    metadata=metadata)
+                            part = 1
+                            current = 0
+                            end = key_size - 1
+                            try:
+                                while current < end:
+                                    if (current + chunk_size) > end:
+                                        log.info('Uploading part #%d (%d, %d) of key `%s`. (size=%d)' %
+                                                (part, current, end, keypath, key_size))
+                                        mpu.copy_part_from_key(self.backup_bucket, keypath, part, current, end)
+                                        current = end
+                                    else:
+                                        next_current = current + chunk_size
+                                        log.info('Uploading part #%d (%d, %d) of key `%s`. (size=%d)' %
+                                                (part, current, next_current - 1, keypath, key_size))
+                                        mpu.copy_part_from_key(self.backup_bucket, keypath, part,
+                                                current, next_current - 1)
+                                        current = next_current
+
+                                    part += 1
+
+                            except Exception as e:
+                                log.info(e)
+                                mpu.cancel_upload()
+                                raise e
+
+                            mpu.complete_upload()
+                            log.info('Successfully multi-part synced key `%s`' % fname)
+                        else:
+                            key.copy(self.backup_bucket, keypath)
+                            log.info('Successfully synced key `%s`' % fname)
+                    else:
+                        log.info('key `%s` found' % keypath)
+
+
+                except Exception as e:
+                    '''
+                    Summary.db files are not mandatory to the restoration of cassandra.
+                    When the are present they can significantly speed up the boot up
+                    time of a cassandra instance. Cassandra will rebuild these files,
+                    if necessary, on reboot.
+                    For some reason `tablesnap` has trouble with these files, as though
+                    they are being removed before `tablesnap` can upload them.
+                    So if these files are missing, sucks, but we can ignore them.
+                    '''
+                    if (re.search(keypath, '-Summary.db')):
+                        log.info('Ignoring sync failure of `%s`' % (fname,))
+                    else:
+                        log.critical(e)
+                        log.info('Failed to sync `%s` retrying' % (fname,))
+
+                        q_sync.increment()
+
+                        if (q_sync.attemptcount > 10):
+                            log.critical('Tried to sync %s too many times. Giving up' %
+                                (fname,))
+                            log.info('Its the final shutdown, da na na na, na, na nana na!!')
+                            os.kill(os.getpid(), signal.SIGKILL)
+
+                        sleep_secs = 60 * q_sync.attemptcount
+                        log.info('Sleep for %d seconds, then retry object `%s`' %
+                            (sleep_secs, fname,))
+
+                        time.sleep(sleep_secs)
+                        queue.put(q_sync)
+
+                #Pop the task regardless of state.  If it failed we've put it back
+                queue.task_done()
+        except Exception as e:
+            log.critical(e)
+            os.kill(os.getpid(), signal.SIGKILL)
+
+        log.info('Thread #%d finished processing' % (idx,))
+
+    def run(self):
+        log.info('Running')
+        self._build_file_set()
+
+        #queue up the filesets
+        for filename in self.fileset:
+            log.info('Pushing file %s onto queue' % filename)
+            self.queue.put(SyncCounter(filename))
+
+#       launch threads and attach an event to them
+        for idx in range(0, self.num_threads):
+            self.threads[idx] = {}
+#            e = threading.Event()
+            t = threading.Thread(target=self._worker,
+                kwargs={'idx': idx, 'queue': self.queue})
+            t.Daemon = True
+            self.threads[idx] = t
+            t.start()
+
+        #Wait for everything to finish downloading
+        self.queue.join()
+        log.info('Sync complete.')
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='This is a companion script to the `tablesnap` program '
+        'which you can use to update timestamps on files from an Amazon S3.',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('-k', '--aws-key',
+        default=os.environ.get('AWS_ACCESS_KEY_ID'),
+        help='Amazon S3 Key (default from AWS_ACCESS_KEY_ID in environment)')
+    parser.add_argument('-s', '--aws-secret',
+        default=os.environ.get('AWS_SECRET_ACCESS_KEY'),
+        help='Amazon S3 Secret (default from AWS_SECRET_ACCESS_KEY in environment)')
+    parser.add_argument('--token',
+        default=os.environ.get('AWS_SECURITY_TOKEN'),
+        help='Amazon S3 Token (default from AWS_SECURITY_TOKEN in environment)')
+    parser.add_argument('-n', '--name', default=socket.getfqdn(),
+        help='Use this name instead of the FQDN to prefix the bucket dir')
+    parser.add_argument('-t', '--threads', default=default_threads,
+        help='Number of writer threads')
+    parser.add_argument('--copy-in-place', action='store_true', default=False,
+        help='Pgp encrypt files before sending to S3')
+    parser.add_argument('index_bucket', nargs=1,
+        help='S3 bucket to download index files from')
+    parser.add_argument('index_file', nargs=1,
+        help='name of the index file to download')
+    parser.add_argument('backup_bucket', nargs=1,
+        help='S3 bucket to download backups from')
+
+    args = parser.parse_args()
+
+    sh = SyncHandler(args)
+    sh.run()
+
+if __name__ == '__main__':
+    sys.exit(main())
+
+
