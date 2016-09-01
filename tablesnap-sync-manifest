@@ -82,23 +82,25 @@ class SyncHandler(object):
         self.backup_bucket = args.backup_bucket[0]
         self.index_bucket = args.index_bucket[0]
         self.num_threads = int(args.threads)
-        self.copy_in_place = args.copy_in_place
+        self.seed = args.seed
+        self.sunset_bucket = args.sunset_bucket
 
         if args.name:
             self.name = args.name
         self.prefix = '%s:' % self.name
 
-    def _get_bucket(self):
+    def _get_bucket(self, name):
 #       unsure if boto is thread-safe, will reconnect every time
-        log.info('Connecting to s3')
+        log.info('Connecting to s3: ' + name)
         try:
             conn = boto.connect_s3(aws_access_key_id=self.key,
                                    aws_secret_access_key=self.secret,
                                    security_token=self.token)
-            bucket = conn.get_bucket(self.backup_bucket)
+            bucket = conn.get_bucket(name)
         except Exception:
+            log.info('Failed to connect to s3: ' + name)
             raise
-        log.info('Connected to s3')
+        log.info('Connected to s3: ' + name)
         return bucket
 
     def _build_file_set(self):
@@ -125,7 +127,10 @@ class SyncHandler(object):
 
     def _worker(self, idx, queue):
         log.info('Thread #%d processing items' % (idx, ))
-        bucket = self._get_bucket()
+        bucket = self._get_bucket(self.backup_bucket)
+        sunset_bucket = None
+        if self.sunset_bucket is not None:
+            sunset_bucket = self._get_bucket(self.sunset_bucket)
         log.info('Have bucket')
         log.info(idx)
 
@@ -137,6 +142,12 @@ class SyncHandler(object):
 
                 try:
                     key = bucket.get_key(keypath.strip())
+                    found_bucket = bucket
+
+                    if key == None and sunset_bucket is not None:
+                        key = sunset_bucket.get_key(keypath.strip())
+                        found_bucket = sunset_bucket
+
                     if (key == None):
                         log.critical('wk %d: Key %s does not exist (yet)' % (idx, keypath))
                         raise
@@ -182,6 +193,9 @@ class SyncHandler(object):
                         else:
                             key.copy(self.backup_bucket, keypath)
                             log.info('Successfully synced key `%s`' % fname)
+                    elif self.seed and found_bucket == sunset_bucket:
+                        log.info('copying key `%s` from sunset bucket' % keypath)
+                        bucket.copy_key(key.name, sunset_bucket, key.name)
                     else:
                         log.info('key `%s` found' % keypath)
 
@@ -269,6 +283,10 @@ def main():
         help='Number of writer threads')
     parser.add_argument('--copy-in-place', action='store_true', default=False,
         help='Pgp encrypt files before sending to S3')
+    parser.add_argument('--seed', action='store_true',
+        help='Seed the backup_bucket from the sunset_bucket')
+    parser.add_argument('--sunset-bucket',
+        help='S3 sunset bucket to download backups from if missing from backup_bucket')
     parser.add_argument('index_bucket', nargs=1,
         help='S3 bucket to download index files from')
     parser.add_argument('index_file', nargs=1,
