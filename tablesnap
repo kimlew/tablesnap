@@ -418,6 +418,7 @@ class UploadHandler(pyinotify.ProcessEvent):
 
             meta = {'uid': stat.st_uid,
                     'gid': stat.st_gid,
+                    'size': stat.st_size,
                     'mode': stat.st_mode}
             try:
                 u = pwd.getpwuid(stat.st_uid)
