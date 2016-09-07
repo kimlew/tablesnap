@@ -82,6 +82,7 @@ class SyncHandler(object):
         self.backup_bucket = args.backup_bucket[0]
         self.index_bucket = args.index_bucket[0]
         self.num_threads = int(args.threads)
+        self.copy_in_place = args.copy_in_place
         self.seed = args.seed
         self.sunset_bucket = args.sunset_bucket
 
