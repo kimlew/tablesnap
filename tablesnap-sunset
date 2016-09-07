@@ -28,7 +28,7 @@ class SunsetHandler(object):
         self.prefix = args.prefix
         self.bucket_name = args.bucket
         self.sunset_bucket_name = args.sunset_bucket
-        self.transition_age = args.transition_age
+        self.dry_run = args.dry_run
 
         self.get_buckets()
 
@@ -54,11 +54,29 @@ class SunsetHandler(object):
                 log.info('Iterated over %s keys' % (count))
             filename = key.name.split(':')[1]
             if not os.path.isfile(filename):
-                age = datetime.utcnow() - datetime.strptime(key.last_modified, '%Y-%m-%dT%H:%M:%S.%fZ')
-                if age.days > self.transition_age:
+                # check for file in sunset bucket already
+                sunset_key = self.sunset_bucket.get_key(key.name)
+
+                if key.storage_class == 'GLACIER':
+                    log.critical('Glacier file in manifest, unexpected, quiting')
+                    sys.exit(1)
+                    return
+                elif sunset_key == None:
                     log.info('Moving key %s to sunset bucket' % (key.name))
-                    self.sunset_bucket.copy_key(key.name, self.bucket_name, key.name)
+                    if not self.dry_run:
+                        self.sunset_bucket.copy_key(key.name, self.bucket_name, key.name)
+                elif key.size != sunset_key.size:
+                    log.info('Key size mismatch (%d != %d), moving key %s to sunset bucket' % (key.size, sunset_key.size, key.name))
+                    if not self.dry_run:
+                        self.sunset_bucket.copy_key(key.name, self.bucket_name, key.name)
+                else:
+                    log.info('Key %s already present in sunset bucket' % (key.name))
+
+                log.info('Removing key %s from active bucket' % (key.name))
+                if not self.dry_run:
                     key.delete()
+            else:
+                log.info('Keeping key %s' % (key.name))
 
 
 def main():
@@ -76,11 +94,8 @@ def main():
     parser.add_argument('--aws-token',
         default=os.environ.get('AWS_SECURITY_TOKEN'),
         help='Amazon S3 Token (default from AWS_SECURITY_TOKEN in environment)')
-    parser.add_argument('--transition-age',
-        type=int,
-        default=7,
-        help='# of days after which the file can be moved to the sunset bucket, '
-             'assuming it has been deleted from the local filesystem')
+    parser.add_argument('--dry-run', action='store_true',
+        help='output which files would be moved')
 
     parser.add_argument('prefix', help='prefix to key path within bucket, e.g. `production/prodcassandra01:')
     parser.add_argument('bucket', help='S3 bucket containing backup sstables')

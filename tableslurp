@@ -71,6 +71,7 @@ class DownloadHandler(object):
         self.index_bucket = args.index_bucket[0]
         self.index_file = args.index_file[0]
         self.backup_bucket = args.backup_bucket[0]
+        self.sunset_bucket = args.sunset_bucket
         self.num_threads = args.threads
         self.force = args.force
         self.pgp = args.pgp
@@ -102,14 +103,14 @@ class DownloadHandler(object):
             raise OSError('User/Group pair %s:%s does not exist' %
                 (owner, group,))
 
-    def _get_bucket(self):
+    def _get_bucket(self, name):
 #       unsure if boto is thread-safe, will reconnect every time
-        log.debug('Connecting to s3')
+        log.info('Connecting to s3: ' + name)
         conn = boto.connect_s3(aws_access_key_id=self.key,
                                aws_secret_access_key=self.secret,
                                security_token=self.token)
-        bucket = conn.get_bucket(self.backup_bucket)
-        log.debug('Connected to s3')
+        bucket = conn.get_bucket(name)
+        log.info('Connected to s3: ' + name)
         return bucket
 
     def _build_file_set(self):
@@ -135,6 +136,11 @@ class DownloadHandler(object):
         log.info('Fileset contains %d files to download' % (len(self.fileset)))
         bucket = conn.get_bucket(self.backup_bucket)
         k = bucket.get_key('%s%s' % (self.prefix, next(iter(self.fileset))))
+        if k is None and self.sunset_bucket is not None:
+            # try to load the file from the sunset bucket
+            sunset_bucket = conn.get_bucket(self.sunset_bucket)
+            k = sunset_bucket.get_key('%s%s' % (self.prefix, next(iter(self.fileset))))
+
 #       The librato branch introduced this
         meta = k.get_metadata('stat')
         log.debug('Metadata is %s' % (meta,))
@@ -220,7 +226,10 @@ class DownloadHandler(object):
 
     def _worker(self, idx, queue):
         log.info('Thread #%d processing items' % (idx, ))
-        bucket = self._get_bucket()
+        bucket = self._get_bucket(self.backup_bucket)
+        sunset_bucket = None
+        if self.sunset_bucket is not None:
+            sunset_bucket = self._get_bucket(self.sunset_bucket)
 
         try:
             while queue.empty() == False:
@@ -238,6 +247,14 @@ class DownloadHandler(object):
                     #Retry downloading until we succeed
                     try:
                         key = bucket.get_key(keypath)
+                        found_bucket = bucket
+
+                        if sunset_bucket is not None and key == None:
+                            log.info('Failed to download `%s` trying sunset_bucket' %
+                                (fname,))
+                            key = sunset_bucket.get_key(keypath)
+                            found_bucket = sunset_bucket
+
                         if key == None:
                             '''
                             Summary.db files are not mandatory to the restoration of cassandra.
@@ -267,7 +284,7 @@ class DownloadHandler(object):
                                 tempdestfile = fname
 
                             log.info('Downloading %s from %s to %s' %
-                                (key.name, bucket.name, tempdestfile))
+                                (key.name, found_bucket.name, tempdestfile))
                             key.get_contents_to_filename(tempdestfile)
 
                             if self.pgp:
@@ -391,6 +408,8 @@ def main():
              ' files are removed')
     parser.add_argument('-n', '--name', default=socket.getfqdn(),
         help='Use this name instead of the FQDN to prefix the bucket dir')
+    parser.add_argument('--sunset-bucket',
+        help='S3 bucket to download backups from if missing from backup_bucket')
     parser.add_argument('index_bucket', nargs=1,
         help='S3 bucket to download index files from')
     parser.add_argument('index_file', nargs=1,
