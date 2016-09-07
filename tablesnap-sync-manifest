@@ -196,7 +196,7 @@ class SyncHandler(object):
                             log.info('Successfully synced key `%s`' % fname)
                     elif self.seed and found_bucket == sunset_bucket:
                         log.info('copying key `%s` from sunset bucket' % keypath)
-                        bucket.copy_key(key.name, sunset_bucket, key.name)
+                        bucket.copy_key(key.name, self.sunset_bucket, key.name)
                     else:
                         log.info('key `%s` found' % keypath)
 
