@@ -273,8 +273,13 @@ class SyncHandler(object):
         if key.size > self.max_size:
             log.info('Performing multipart copy for %s' %
                          (key.name))
+            # work around bug https://github.com/boto/boto/issues/2536
+            metadata = {}
+            for k, v in key.metadata.iteritems():
+                metadata[k] = v.encode('utf8')
+
             mp = bucket.initiate_multipart_upload(key.name,
-                metadata=key.metadata)
+                metadata=metadata)
             part = 1
             chunk = None
             try:
