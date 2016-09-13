@@ -1,0 +1,6 @@
+argparse
+boto>=2.6.0
+graphitesend
+pyinotify
+python-dateutil
+six
