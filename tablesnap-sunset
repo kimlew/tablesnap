@@ -18,6 +18,14 @@ if os.environ.get('TDEBUG', False):
 else:
     log.setLevel(logging.INFO)
 
+# S3 limit for single file upload
+s3_limit = 5 * 2**30
+
+# Max file size to upload without doing multipart in MB
+max_file_size = 5120
+
+# Default chunk size for multipart uploads in MB
+default_chunk_size = 256
 
 class SunsetHandler(object):
 
@@ -29,6 +37,9 @@ class SunsetHandler(object):
         self.bucket_name = args.bucket
         self.sunset_bucket_name = args.sunset_bucket
         self.dry_run = args.dry_run
+
+        self.max_size = max_file_size * 2**20
+        self.chunk_size = chunk_size * 2**20
 
         self.get_buckets()
 
@@ -64,11 +75,11 @@ class SunsetHandler(object):
                 elif sunset_key == None:
                     log.info('Moving key %s to sunset bucket' % (key.name))
                     if not self.dry_run:
-                        self.sunset_bucket.copy_key(key.name, self.bucket_name, key.name)
+                        self.copy(key)
                 elif key.size != sunset_key.size:
                     log.info('Key size mismatch (%d != %d), moving key %s to sunset bucket' % (key.size, sunset_key.size, key.name))
                     if not self.dry_run:
-                        self.sunset_bucket.copy_key(key.name, self.bucket_name, key.name)
+                        self.copy(key)
                 else:
                     log.info('Key %s already present in sunset bucket' % (key.name))
 
@@ -78,6 +89,42 @@ class SunsetHandler(object):
             else:
                 log.info('Keeping key %s' % (key.name))
 
+    def copy(self, key):
+        self.log.debug('File size check: %s > %s ? : %s' %
+            (key.size, self.max_size,
+            (key.size > self.max_size),))
+        if key.size > self.max_size:
+            self.log.info('Performing multipart copy for %s' %
+                         (key.name))
+            # refetch key to make sure we have metadata
+            key = self.bucket.get_key(key.name)
+            mp = self.sunset_bucket.initiate_multipart_upload(key.name,
+                metadata=key.metadata)
+            part = 1
+            chunk = None
+            try:
+                for chunk_start in xrange(0, key.size, self.chunk_size):
+                    chunk_end = chunk_start + self.chunk_size -1
+                    if chunk_end >= key.size:
+                        chunk_end = key.size-1
+                    chunk_size = chunk_end - chunk_start + 1
+                    self.log.debug('Uploading part #%d '
+                                   '(size: %d)' %
+                                   (part, chunk_size,))
+                    mp.copy_part_from_key(self.bucket_name, key.name, part, chunk_start, chunk_end)
+                    part += 1
+                part -= 1
+            except Exception as e:
+                self.log.debug(e)
+                self.log.info('Error uploading part %d' % (part,))
+                mp.cancel_upload()
+                raise
+            self.log.debug('Uploaded %d parts, '
+                           'completing upload' % (part,))
+            mp.complete_upload()
+        else:
+            self.log.debug('Performing monolithic copy')
+            self.sunset_bucket.copy_key(key.name, self.bucket_name, key.name)
 
 def main():
     parser = argparse.ArgumentParser(description='tablesnap_sunset is a script that '

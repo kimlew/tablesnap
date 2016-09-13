@@ -86,6 +86,9 @@ class SyncHandler(object):
         self.seed = args.seed
         self.sunset_bucket = args.sunset_bucket
 
+        self.max_size = max_file_size * 2**20
+        self.chunk_size = chunk_size * 2**20
+
         if args.name:
             self.name = args.name
         self.prefix = '%s:' % self.name
@@ -196,7 +199,7 @@ class SyncHandler(object):
                             log.info('Successfully synced key `%s`' % fname)
                     elif self.seed and found_bucket == sunset_bucket:
                         log.info('copying key `%s` from sunset bucket' % keypath)
-                        bucket.copy_key(key.name, self.sunset_bucket, key.name)
+                        self.copy(bucket, key)
                     else:
                         log.info('key `%s` found' % keypath)
 
@@ -262,6 +265,41 @@ class SyncHandler(object):
         #Wait for everything to finish downloading
         self.queue.join()
         log.info('Sync complete.')
+
+    def copy(self, bucket, key):
+        self.log.debug('File size check: %s > %s ? : %s' %
+            (key.size, self.max_size,
+            (key.size > self.max_size),))
+        if key.size > self.max_size:
+            self.log.info('Performing multipart copy for %s' %
+                         (key.name))
+            mp = bucket.initiate_multipart_upload(key.name,
+                metadata=key.metadata)
+            part = 1
+            chunk = None
+            try:
+                for chunk_start in xrange(0, key.size, self.chunk_size):
+                    chunk_end = chunk_start + self.chunk_size -1
+                    if chunk_end >= key.size:
+                        chunk_end = key.size-1
+                    chunk_size = chunk_end - chunk_start + 1
+                    self.log.debug('Uploading part #%d '
+                                   '(size: %d)' %
+                                   (part, chunk_size,))
+                    mp.copy_part_from_key(self.sunset_bucket, key.name, part, chunk_start, chunk_end)
+                    part += 1
+                part -= 1
+            except Exception as e:
+                self.log.debug(e)
+                self.log.info('Error uploading part %d' % (part,))
+                mp.cancel_upload()
+                raise
+            self.log.debug('Uploaded %d parts, '
+                           'completing upload' % (part,))
+            mp.complete_upload()
+        else:
+            self.log.debug('Performing monolithic copy')
+            bucket.copy_key(key.name, self.sunset_bucket, key.name)
 
 
 def main():
