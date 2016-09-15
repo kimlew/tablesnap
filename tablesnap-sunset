@@ -81,7 +81,9 @@ class SunsetHandler(object):
                     if not self.dry_run:
                         self.copy(key)
                 else:
-                    log.info('Key %s already present in sunset bucket' % (key.name))
+                    log.info('Key %s already present in sunset bucket. copying over to update timestamp' % (key.name))
+                    if not self.dry_run:
+                        self.copy(key)
 
                 log.info('Removing key %s from active bucket' % (key.name))
                 if not self.dry_run:
