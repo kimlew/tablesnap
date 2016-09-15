@@ -154,7 +154,11 @@ class SyncHandler(object):
 
                     if (key == None):
                         log.critical('wk %d: Key %s does not exist (yet)' % (idx, keypath))
-                        raise
+                        raise Exception('Key missing')
+
+                    if key.storage_class == 'GLACIER':
+                        log.critical('Glacier file in manifest, unexpected, quiting')
+                        raise Exception('Key in GLACIER')
 
                     if self.copy_in_place:
                         key_size = key.size
