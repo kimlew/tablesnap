@@ -160,50 +160,12 @@ class SyncHandler(object):
                         log.critical('Glacier file in manifest, unexpected, quiting')
                         raise Exception('Key in GLACIER')
 
-                    if self.copy_in_place:
-                        key_size = key.size
-                        log.debug('File size check: %s > %s ? : %s' %
-                            (key_size, max_size,
-                            (key_size > max_size),))
-                        if key_size > max_size:
-                            log.info('Performing multipart copy for `%s`' %
-                                         (keypath))
-                            metadata = key.metadata
-                            mpu = bucket.initiate_multipart_upload(keypath,
-                                    metadata=metadata)
-                            part = 1
-                            current = 0
-                            end = key_size - 1
-                            try:
-                                while current < end:
-                                    if (current + chunk_size) > end:
-                                        log.info('Uploading part #%d (%d, %d) of key `%s`. (size=%d)' %
-                                                (part, current, end, keypath, key_size))
-                                        mpu.copy_part_from_key(self.backup_bucket, keypath, part, current, end)
-                                        current = end
-                                    else:
-                                        next_current = current + chunk_size
-                                        log.info('Uploading part #%d (%d, %d) of key `%s`. (size=%d)' %
-                                                (part, current, next_current - 1, keypath, key_size))
-                                        mpu.copy_part_from_key(self.backup_bucket, keypath, part,
-                                                current, next_current - 1)
-                                        current = next_current
-
-                                    part += 1
-
-                            except Exception as e:
-                                log.info(e)
-                                mpu.cancel_upload()
-                                raise e
-
-                            mpu.complete_upload()
-                            log.info('Successfully multi-part synced key `%s`' % fname)
-                        else:
-                            key.copy(self.backup_bucket, keypath)
-                            log.info('Successfully synced key `%s`' % fname)
+                    if self.copy_in_place and found_bucket == bucket:
+                        log.info('copying key `%s` in place' % keypath)
+                        self.copy(self.backup_bucket, bucket, key)
                     elif self.seed and found_bucket == sunset_bucket:
                         log.info('copying key `%s` from sunset bucket' % keypath)
-                        self.copy(bucket, key)
+                        self.copy(self.sunset_bucket, bucket, key)
                     else:
                         log.info('key `%s` found' % keypath)
 
@@ -270,7 +232,7 @@ class SyncHandler(object):
         self.queue.join()
         log.info('Sync complete.')
 
-    def copy(self, bucket, key):
+    def copy(self, from_bucket, to_bucket, key):
         log.debug('File size check: %s > %s ? : %s' %
             (key.size, self.max_size,
             (key.size > self.max_size),))
@@ -282,7 +244,7 @@ class SyncHandler(object):
             for k, v in key.metadata.iteritems():
                 metadata[k] = v.encode('utf8')
 
-            mp = bucket.initiate_multipart_upload(key.name,
+            mp = to_bucket.initiate_multipart_upload(key.name,
                 metadata=metadata)
             part = 1
             chunk = None
@@ -295,7 +257,7 @@ class SyncHandler(object):
                     log.debug('Uploading part #%d '
                                    '(size: %d)' %
                                    (part, chunk_size,))
-                    mp.copy_part_from_key(self.sunset_bucket, key.name, part, chunk_start, chunk_end)
+                    mp.copy_part_from_key(from_bucket, key.name, part, chunk_start, chunk_end)
                     part += 1
                 part -= 1
             except Exception as e:
@@ -308,7 +270,7 @@ class SyncHandler(object):
             mp.complete_upload()
         else:
             log.debug('Performing monolithic copy')
-            bucket.copy_key(key.name, self.sunset_bucket, key.name)
+            to_bucket.copy_key(key.name, from_bucket, key.name)
 
 
 def main():
