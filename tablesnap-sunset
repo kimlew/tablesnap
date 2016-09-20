@@ -2,6 +2,7 @@
 
 import argparse
 import boto
+from boto.utils import parse_ts
 from datetime import datetime
 import logging
 import os
@@ -65,6 +66,13 @@ class SunsetHandler(object):
                 log.info('Iterated over %s keys' % (count))
             filename = key.name.split(':')[1]
             if not os.path.isfile(filename):
+                # check if timestamp too new, might still be uploading
+                # https://forums.aws.amazon.com/thread.jspa?threadID=21634&tstart=0
+                delta = datetime.utcnow() - parse_ts(key.last_modified)
+                if delta.days <= 0 and delta.seconds < 3600:
+                    log.info('key is too new, keeping it: %s: %s' % (key.name, delta))
+                    continue
+
                 # check for file in sunset bucket already
                 sunset_key = self.sunset_bucket.get_key(key.name)
 
