@@ -220,6 +220,44 @@ class DownloadHandler(object):
                     return False
             else:
                 log.debug('Skip MD5 comparison for key: %s' % filename)
+                # do a simple file size check
+                try:
+                    size = os.path.getsize(filename)
+                except OSError as e:
+                    # if e.errno == 2:
+                    #     # The file was removed, return False to download this file.
+                    #     return False
+
+                    log.critical("Failed to open file: %s (%s)\n%s" %
+                                 (e.filename, e.strerror, format_exc(),))
+                    raise
+
+                meta = bucket_key.get_metadata('stat')
+                if meta:
+                    try:
+                        json_data = json.loads(meta)
+                        s3_size = json_data['size']
+
+                        if s3_size != size:
+                            log.warning('ATTENTION: your source (%s) and target (%s) '
+                                'sizes differ, you should take a look. As immutable '
+                                'files never change, one must assume the local file got '
+                                'corrupted and the right version is the one in S3. Will '
+                                'skip this file to avoid future complications' %
+                                (filename, bucket_key.name, ))
+                            return False
+                        else:
+                            log.info("Keyname %s already exists, skipping download"
+                                          % (filename))
+                            return True
+                    except TypeError as te:
+                        log.debug(te)
+                        log.warning('Could not parse stat metadata for %s' % (k.name,))
+                    except KeyError as ke:
+                        log.debug(ke)
+                        log.warning('Incomplete stat metadata for %s, will ignore' %
+                            (k.name,))
+                log.info('Meta data not available for key %s; skipping size check' % filename)
                 return True
         else:
             return False
