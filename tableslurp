@@ -252,11 +252,11 @@ class DownloadHandler(object):
                             return True
                     except TypeError as te:
                         log.debug(te)
-                        log.warning('Could not parse stat metadata for %s' % (k.name,))
+                        log.warning('Could not parse stat metadata for %s' % (bucket_key.name,))
                     except KeyError as ke:
                         log.debug(ke)
                         log.warning('Incomplete stat metadata for %s, will ignore' %
-                            (k.name,))
+                            (bucket_key.name,))
                 log.info('Meta data not available for key %s; skipping size check' % filename)
                 return True
         else:
