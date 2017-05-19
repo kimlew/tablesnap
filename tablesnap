@@ -77,7 +77,7 @@ class UploadCounter(object):
         self.filename = filename
         cf = os.path.basename(os.path.dirname(filename))
         ks = os.path.basename(os.path.dirname(os.path.dirname(filename)))
-        self.hardname = tmp_dir + '/' + cf + '-' + ks + '-' + os.path.basename(filename)
+        self.hardname = tmp_dir + '/' + ks + '-' + cf + '-' + os.path.basename(filename)
         default_log.debug('Creating hardlink from %s to %s' % (filename, self.hardname))
         os.link(filename, self.hardname)
 
