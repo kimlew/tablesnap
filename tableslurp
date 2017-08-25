@@ -48,10 +48,12 @@ else:
 
 class DownloadCounter(object):
     filename = None
+    index = None
     attemptcount = 0
 
-    def __init__(self, filename):
+    def __init__(self, filename, index):
         self.filename = filename
+        self.index = index
 
     def increment(self):
         self.attemptcount += 1
@@ -317,7 +319,9 @@ class DownloadHandler(object):
 
                         if download and key:
                             if self.pgp:
-                                tempdestfile = self.pgp_tmp_dir + '/' + os.path.basename(fname)
+                                # the basename might conflict with files in other folders,
+                                # so prepend the index
+                                tempdestfile = self.pgp_tmp_dir + '/' + ("%d-%s" % (queueddownload.index, os.path.basename(fname)))
                             else:
                                 tempdestfile = fname
 
@@ -370,9 +374,9 @@ class DownloadHandler(object):
         log.info('Running')
 
         #queue up the filesets
-        for filename in self.fileset:
+        for i, filename in enumerate(self.fileset):
             log.info('Pushing file %s onto queue' % filename)
-            self.queue.put(DownloadCounter(filename))
+            self.queue.put(DownloadCounter(filename, i))
 
 #       launch threads and attach an event to them
         for idx in range(0, self.num_threads):
