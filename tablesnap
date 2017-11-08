@@ -225,7 +225,7 @@ class UploadHandler(pyinotify.ProcessEvent):
                     scheduler.enter(sleep_secs, 1, lambda x,y: x.put(y), (self.fileq, q_upload,))
                     scheduler.run()
             else:
-                self.log.info('Skipping %s. Short lived sstable' % q_upload.filename)
+                self.log.info('Skipping %s. Short lived sstable.' % q_upload.filename)
                 # unlinking filename
                 q_upload.done()
 
