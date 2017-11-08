@@ -202,23 +202,32 @@ class UploadHandler(pyinotify.ProcessEvent):
             q_upload = self.fileq.get()
             f = q_upload.hardname
             keyname = self.build_keyname(q_upload.filename)
-            try:
-                self.upload_sstable(bucket, keyname, f)
-                q_upload.done()
-            except:
-                self.log.critical("Failed uploading %s. Hardlink %s. Aborting.\n%s" %
-                             (q_upload.filename, f, format_exc()))
-                q_upload.increment()
-                if (q_upload.attemptcount > max_upload_attempts):
-                    # Brute force kill self
-                    q_upload.done()
-                    self.log.critical("Shutting down! beep - boop - beep")
-                    os.kill(os.getpid(), signal.SIGKILL)
 
-                sleep_secs = 60 * q_upload.attemptcount
-                self.log.info("Attempt to upload %s again in %s seconds" % (q_upload.filename, sleep_secs,))
-                scheduler.enter(sleep_secs, 1, lambda x,y: x.put(y), (self.fileq, q_upload,))
-                scheduler.run()
+            # wait 10s to prevent any short lived sstables during repairs
+            # from being backed up
+            time.sleep(10)
+            if (os.path.exists(q_upload.filename))
+                try:
+                    self.upload_sstable(bucket, keyname, f)
+                    q_upload.done()
+                except:
+                    self.log.critical("Failed uploading %s. Hardlink %s. Aborting.\n%s" %
+                                 (q_upload.filename, f, format_exc()))
+                    q_upload.increment()
+                    if (q_upload.attemptcount > max_upload_attempts):
+                        # Brute force kill self
+                        q_upload.done()
+                        self.log.critical("Shutting down! beep - boop - beep")
+                        os.kill(os.getpid(), signal.SIGKILL)
+
+                    sleep_secs = 60 * q_upload.attemptcount
+                    self.log.info("Attempt to upload %s again in %s seconds" % (q_upload.filename, sleep_secs,))
+                    scheduler.enter(sleep_secs, 1, lambda x,y: x.put(y), (self.fileq, q_upload,))
+                    scheduler.run()
+            else:
+                self.log.info('Skipping %s. Short lived sstable' % q_upload.filename)
+                # unlinking filename
+                q_upload.done()
 
             self.fileq.task_done()
 
