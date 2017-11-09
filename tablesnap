@@ -72,6 +72,7 @@ scheduler = sched.scheduler(time.time, time.sleep)
 class UploadCounter(object):
     filename = None
     attemptcount = 0
+    timestamp = time.time()
 
     def __init__(self, filename, tmp_dir):
         self.filename = filename
@@ -118,6 +119,7 @@ class UploadHandler(pyinotify.ProcessEvent):
         self.with_index = with_index
         self.with_sse = with_sse
         self.md5_on_start = md5_on_start
+        self.interval_start = sys.float_info.max
 
         if self.pgp and not os.path.exists(self.pgp_tmp_dir):
             os.makedirs(self.pgp_tmp_dir)
@@ -203,10 +205,9 @@ class UploadHandler(pyinotify.ProcessEvent):
             f = q_upload.hardname
             keyname = self.build_keyname(q_upload.filename)
 
-            # wait 10s to prevent any short lived sstables during repairs
-            # from being backed up
-            time.sleep(10)
-            if (os.path.exists(q_upload.filename))
+            # if sstable has existed for more than approximately 10s
+            # then upload it
+            if (sstable_exists(q_upload))
                 try:
                     self.upload_sstable(bucket, keyname, f)
                     q_upload.done()
@@ -230,6 +231,19 @@ class UploadHandler(pyinotify.ProcessEvent):
                 q_upload.done()
 
             self.fileq.task_done()
+
+    #
+    # Process sstables in 10s intervals to prevent any short lived
+    # sstables during repairs from being backed up
+    #
+    def sstable_exists(q_upload):
+        if (q_upload.timestamp < interval_start)
+            time.sleep(10)
+            self.interval_start = time.time()
+
+        if (os.path.exists(q_upload.filename))
+            return True
+        return False
 
     def process_IN_CLOSE_WRITE(self, event):
         self.add_file(event.pathname)
