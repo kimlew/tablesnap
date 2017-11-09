@@ -232,7 +232,7 @@ class UploadHandler(pyinotify.ProcessEvent):
             self.fileq.task_done()
 
     #
-    # Process sstables in 10s intervals to prevent any short lived
+    # Process sstables that are at least 10s old to prevent short-lived
     # sstables created during repairs from being backed up
     #
     def sstable_exists(self, q_upload):
