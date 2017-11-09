@@ -119,7 +119,6 @@ class UploadHandler(pyinotify.ProcessEvent):
         self.with_index = with_index
         self.with_sse = with_sse
         self.md5_on_start = md5_on_start
-        self.interval_start = sys.float_info.max
 
         if self.pgp and not os.path.exists(self.pgp_tmp_dir):
             os.makedirs(self.pgp_tmp_dir)
@@ -207,7 +206,7 @@ class UploadHandler(pyinotify.ProcessEvent):
 
             # if sstable has existed for more than approximately 10s
             # then upload it
-            if (sstable_exists(q_upload))
+            if (self.sstable_exists(q_upload))
                 try:
                     self.upload_sstable(bucket, keyname, f)
                     q_upload.done()
@@ -234,12 +233,11 @@ class UploadHandler(pyinotify.ProcessEvent):
 
     #
     # Process sstables in 10s intervals to prevent any short lived
-    # sstables during repairs from being backed up
+    # sstables created during repairs from being backed up
     #
-    def sstable_exists(q_upload):
-        if (q_upload.timestamp < interval_start)
+    def sstable_exists(self, q_upload):
+        if (time.time() - q_upload.timestamp < 10)
             time.sleep(10)
-            self.interval_start = time.time()
 
         if (os.path.exists(q_upload.filename))
             return True
