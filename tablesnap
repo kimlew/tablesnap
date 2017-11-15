@@ -206,7 +206,7 @@ class UploadHandler(pyinotify.ProcessEvent):
 
             # if sstable has existed for more than approximately 10s
             # then upload it
-            if (self.sstable_exists(q_upload))
+            if (self.sstable_exists(q_upload)):
                 try:
                     self.upload_sstable(bucket, keyname, f)
                     q_upload.done()
@@ -236,10 +236,10 @@ class UploadHandler(pyinotify.ProcessEvent):
     # sstables created during repairs from being backed up
     #
     def sstable_exists(self, q_upload):
-        if (time.time() - q_upload.timestamp < 10)
+        if (time.time() - q_upload.timestamp < 10):
             time.sleep(10)
 
-        if (os.path.exists(q_upload.filename))
+        if (os.path.exists(q_upload.filename)):
             return True
         return False
 
