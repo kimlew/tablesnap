@@ -75,6 +75,7 @@ class UploadCounter(object):
 
     def __init__(self, filename, tmp_dir):
         self.filename = filename
+        self.timestamp = time.time()
         cf = os.path.basename(os.path.dirname(filename))
         ks = os.path.basename(os.path.dirname(os.path.dirname(filename)))
         self.hardname = tmp_dir + '/' + ks + '-' + cf + '-' + os.path.basename(filename)
@@ -202,25 +203,45 @@ class UploadHandler(pyinotify.ProcessEvent):
             q_upload = self.fileq.get()
             f = q_upload.hardname
             keyname = self.build_keyname(q_upload.filename)
-            try:
-                self.upload_sstable(bucket, keyname, f)
-                q_upload.done()
-            except:
-                self.log.critical("Failed uploading %s. Hardlink %s. Aborting.\n%s" %
-                             (q_upload.filename, f, format_exc()))
-                q_upload.increment()
-                if (q_upload.attemptcount > max_upload_attempts):
-                    # Brute force kill self
-                    q_upload.done()
-                    self.log.critical("Shutting down! beep - boop - beep")
-                    os.kill(os.getpid(), signal.SIGKILL)
 
-                sleep_secs = 60 * q_upload.attemptcount
-                self.log.info("Attempt to upload %s again in %s seconds" % (q_upload.filename, sleep_secs,))
-                scheduler.enter(sleep_secs, 1, lambda x,y: x.put(y), (self.fileq, q_upload,))
-                scheduler.run()
+            # if sstable has existed for more than approximately 10s
+            # then upload it
+            if (self.sstable_exists(q_upload)):
+                try:
+                    self.upload_sstable(bucket, keyname, f)
+                    q_upload.done()
+                except:
+                    self.log.critical("Failed uploading %s. Hardlink %s. Aborting.\n%s" %
+                                 (q_upload.filename, f, format_exc()))
+                    q_upload.increment()
+                    if (q_upload.attemptcount > max_upload_attempts):
+                        # Brute force kill self
+                        q_upload.done()
+                        self.log.critical("Shutting down! beep - boop - beep")
+                        os.kill(os.getpid(), signal.SIGKILL)
+
+                    sleep_secs = 60 * q_upload.attemptcount
+                    self.log.info("Attempt to upload %s again in %s seconds" % (q_upload.filename, sleep_secs,))
+                    scheduler.enter(sleep_secs, 1, lambda x,y: x.put(y), (self.fileq, q_upload,))
+                    scheduler.run()
+            else:
+                self.log.info('Skipping %s. Short lived sstable.' % q_upload.filename)
+                # unlinking filename
+                q_upload.done()
 
             self.fileq.task_done()
+
+    #
+    # Process sstables that are at least 10s old to prevent short-lived
+    # sstables created during repairs from being backed up
+    #
+    def sstable_exists(self, q_upload):
+        if (time.time() - q_upload.timestamp < 10):
+            time.sleep(10)
+
+        if (os.path.exists(q_upload.filename)):
+            return True
+        return False
 
     def process_IN_CLOSE_WRITE(self, event):
         self.add_file(event.pathname)
