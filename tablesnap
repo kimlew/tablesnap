@@ -101,6 +101,7 @@ class UploadHandler(pyinotify.ProcessEvent):
                 pgp=False,
                 pgp_tmp_dir=None,
                 hardlink_tmp_dir=None,
+                hardlink_tmp_map=None,
                 log=default_log,
                 md5_on_start=False):
         self.key = key
@@ -113,6 +114,7 @@ class UploadHandler(pyinotify.ProcessEvent):
         self.pgp = pgp
         self.pgp_tmp_dir = pgp_tmp_dir
         self.hardlink_tmp_dir = hardlink_tmp_dir
+        self.hardlink_tmp_map = hardlink_tmp_map
         self.retries = default_retries
         self.log = log
         self.include = include
@@ -181,8 +183,9 @@ class UploadHandler(pyinotify.ProcessEvent):
         default_log.info("%s: %s", filename, self.include(filename))
         if self.include is None or (self.include is not None
                                     and self.include(filename)):
+            hardlink_tmp_dir = next((v for k,v in self.hardlink_tmp_map.items() if filename.startswith(k)), self.hardlink_tmp_dir)
             try:
-                self.fileq.put(UploadCounter(filename, self.hardlink_tmp_dir))
+                self.fileq.put(UploadCounter(filename, hardlink_tmp_dir))
             except Exception as e:
                 self.log.critical(e)
                 self.log.critical("Add file to queue failed: %s\n" % filename)
@@ -611,7 +614,11 @@ def main():
     parser.add_argument('--pgp-tmp-dir', default='/tmp/tablesnap-pgp',
         help='Temporary location of pgp encrypted sstables')
     parser.add_argument('--hardlink-tmp-dir', default='/tmp/tablesnap-hardlinks',
-        help='Temporary location of pgp encrypted sstables')
+        help='Temporary location of hardlinks')
+    parser.add_argument('--hardlink-tmp-map', default='',
+            help='Temporary location of hardlinks, map of prefix to drive:'
+                 '{"k1":"v1","k2":"v2",...}'
+                 'if missing from map, value from --hardlink-tmp-dir is used')
     parser.add_argument('-n', '--name',
         help='Use this name instead of the FQDN to identify the files from '
              'this host')
@@ -671,6 +678,17 @@ def main():
         else:
             os.makedirs(args.hardlink_tmp_dir)
 
+        hardlink_tmp_map = {}
+        if args.hardlink_tmp_map != '':
+            hardlink_tmp_map = json.loads(args.hardlink_tmp_map)
+            for entry_prefix, entry_dir in hardlink_tmp_map.items():
+                if (os.path.exists(entry_dir)):
+                    default_log.info('Clearing hardlink tmp dir %s -> %s' % (entry_prefix, entry_dir))
+                    map( os.unlink, [os.path.join(entry_dir,f) for f in os.listdir(entry_dir)] )
+                else:
+                    default_log.info('Creating hardlink tmp dir %s -> %s' % (entry_prefix, entry_dir))
+                    os.makedirs(entry_dir)
+
         # Check S3 credentials only. We reconnect per-thread to avoid any
         # potential thread-safety problems.
 
@@ -690,6 +708,7 @@ def main():
                                 pgp=args.pgp,
                                 pgp_tmp_dir=args.pgp_tmp_dir,
                                 hardlink_tmp_dir=args.hardlink_tmp_dir,
+                                hardlink_tmp_map=hardlink_tmp_map,
                                 max_size=int(args.max_upload_size),
                                 chunk_size=int(args.multipart_chunk_size),
                                 md5_on_start=args.md5_on_start)
