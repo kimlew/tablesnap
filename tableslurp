@@ -393,12 +393,13 @@ class DownloadHandler(object):
         log.info('Download complete.')
         if self.clean_data_dir:
             log.info('Begin cleaning of un-indexed data files.')
-            for root, dirnames, filenames in os.walk(self.data_dir):
-                for filename in filenames:
-                    filepath = root + os.sep + filename
-                    if not filepath in self.fileset:
-                        log.info('Removing %s' % (filepath,))
-                        os.remove(filepath)
+            for data_dir in self.data_dir.split(':'):
+                for root, dirnames, filenames in os.walk(data_dir):
+                    for filename in filenames:
+                        filepath = root + os.sep + filename
+                        if not filepath in self.fileset:
+                            log.info('Removing %s' % (filepath,))
+                            os.remove(filepath)
             log.info('Cleaning of data directory complete.')
 
         log.info('My job is done.')
@@ -447,7 +448,7 @@ def main():
         help='Remove un-indexed files from the data directory')
     parser.add_argument('--data-dir', default='/var/lib/cassandra/data',
         help='Data directory where new files are downloaded and unnecessary'
-             ' files are removed')
+             ' files are removed (can be multiple paths, ":" delimited)')
     parser.add_argument('-n', '--name', default=socket.getfqdn(),
         help='Use this name instead of the FQDN to prefix the bucket dir')
     parser.add_argument('--sunset-bucket',
