@@ -5,3 +5,8 @@ env
 build
 dist
 virtualenv
+
+py27env/
+py36env/
+
+*.bak
