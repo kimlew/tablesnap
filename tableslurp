@@ -31,7 +31,11 @@ import sys
 import signal
 import subprocess
 import re
-from Queue import Queue
+
+try:
+	from queue import Queue
+except ImportError:
+	from Queue import Queue
 
 SRC_MD5_META='s3putsecure-md5'
 
@@ -186,7 +190,8 @@ class DownloadHandler(object):
             if self.md5_on_start:
                 try:
                     fp = open(filename, "r")
-                except IOError as (errno, strerror):
+                except IOError as e:
+                    (errno, strerror) = e.args
                     if errno == 2:
                         # The file was removed, return False to download this file.
                         return False
