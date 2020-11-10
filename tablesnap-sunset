@@ -123,7 +123,7 @@ class SunsetHandler(object):
             key = self.bucket.get_key(key.name)
             # work around bug https://github.com/boto/boto/issues/2536
             metadata = {}
-            for k, v in key.metadata.iteritems():
+            for k, v in key.metadata.items():
                 metadata[k] = v.encode('utf8')
 
             mp = self.sunset_bucket.initiate_multipart_upload(key.name,
@@ -131,7 +131,7 @@ class SunsetHandler(object):
             part = 1
             chunk = None
             try:
-                for chunk_start in xrange(0, key.size, self.chunk_size):
+                for chunk_start in range(0, key.size, self.chunk_size):
                     chunk_end = chunk_start + self.chunk_size -1
                     if chunk_end >= key.size:
                         chunk_end = key.size-1
