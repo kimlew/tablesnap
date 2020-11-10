@@ -28,7 +28,11 @@ import socket
 import logging
 import threading
 import re
-from Queue import Queue
+
+try:
+	from queue import Queue
+except ImportError:
+	from Queue import Queue
 
 log = logging.getLogger('tablesnap-syncer')
 stderr = logging.StreamHandler()
@@ -241,7 +245,7 @@ class SyncHandler(object):
                          (key.name))
             # work around bug https://github.com/boto/boto/issues/2536
             metadata = {}
-            for k, v in key.metadata.iteritems():
+            for k, v in key.metadata.items():
                 metadata[k] = v.encode('utf8')
 
             mp = to_bucket.initiate_multipart_upload(key.name,
@@ -249,7 +253,7 @@ class SyncHandler(object):
             part = 1
             chunk = None
             try:
-                for chunk_start in xrange(0, key.size, self.chunk_size):
+                for chunk_start in range(0, key.size, self.chunk_size):
                     chunk_end = chunk_start + self.chunk_size -1
                     if chunk_end >= key.size:
                         chunk_end = key.size-1
@@ -311,5 +315,3 @@ def main():
 
 if __name__ == '__main__':
     sys.exit(main())
-
-
