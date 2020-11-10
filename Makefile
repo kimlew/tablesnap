@@ -35,11 +35,17 @@ docker-py36env:
 
 test_py2.7: docker-py27env
 	# docker run -it --mount type=bind,source=$(PWD),target=/tablesnap migrate2to3:v1 ./py27env/bin/python ./tablesnap --help
-	docker run -it --mount type=bind,source=$(PWD),target=/tablesnap -e USER=root migrate2to3:v1 ./py27env/bin/python ./tableslurp --help
+	# docker run -it --mount type=bind,source=$(PWD),target=/tablesnap -e USER=root migrate2to3:v1 ./py27env/bin/python ./tableslurp --help
+	docker run -it --mount type=bind,source=$(PWD),target=/tablesnap migrate2to3:v1 ./py27env/bin/python ./tablechop --help
+	# docker run -it --mount type=bind,source=$(PWD),target=/tablesnap migrate2to3:v1 ./py27env/bin/python ./tablesnap-sunset --help
+	# docker run -it --mount type=bind,source=$(PWD),target=/tablesnap migrate2to3:v1 ./py27env/bin/python ./tablesnap-sync-manifest --help
 
 test_py3.6: docker-py36env # Note: Expect this to FAIL until Python migration changes done when syntax errors corrected.
 	# docker run -it --mount type=bind,source=$(PWD),target=/tablesnap migrate2to3:v1 ./py36env/bin/python ./tablesnap --help
-	docker run -it --mount type=bind,source=$(PWD),target=/tablesnap -e USER=root migrate2to3:v1 ./py36env/bin/python ./tableslurp --help
+	# docker run -it --mount type=bind,source=$(PWD),target=/tablesnap -e USER=root migrate2to3:v1 ./py36env/bin/python ./tableslurp --help
+	docker run -it --mount type=bind,source=$(PWD),target=/tablesnap migrate2to3:v1 ./py36env/bin/python ./tablechop --help
+	# docker run -it --mount type=bind,source=$(PWD),target=/tablesnap migrate2to3:v1 ./py36env/bin/python ./tablesnap-sunset --help
+	# docker run -it --mount type=bind,source=$(PWD),target=/tablesnap migrate2to3:v1 ./py36env/bin/python ./tablesnap-sync-manifest --help
 
 clean:
 	rm -rf py27env
