@@ -37,13 +37,13 @@ def clean_backups(args, log):
                                  aws_secret_access_key=args.secret,
                                  security_token=args.token)
         bucket = s3conn.get_bucket(args.bucket)
-    except boto.exception.BotoServerError, e:
+    except boto.exception.BotoServerError as e:
         log.error('Problem initializing S3 connection: %s', e)
         sys.exit(1)
 
     try:
         key_list = bucket.list("%s:%s" % (args.name, args.path))
-    except boto.exception.BotoServerError, e:
+    except boto.exception.BotoServerError as e:
         log.error('Problem getting keys from S3 bucket: %s', e)
         sys.exit(1)
 
@@ -75,12 +75,12 @@ def clean_backups(args, log):
                 break
         ky = bucket.get_key(jkey)
         jdict = json.loads(ky.get_contents_as_string())
-        if len(jdict.values()) != 1:
+        if len(list(jdict.values())) != 1:
             raise SystemError('-listdir.json file should have '
                 'a single key/value pair!')
-        dirname = jdict.keys()[0]
+        dirname = list(jdict.keys())[0]
         # fullpaths here since some files are in subdirectories
-        fullpaths = [os.path.join(dirname, x) for x in jdict.values()[0]]
+        fullpaths = [os.path.join(dirname, x) for x in list(jdict.values())[0]]
         keep_jkey = False # assume we are deleting the jkey
         for x in fullpaths:
             keep_file = True # assume we are keeping the file - this is the
@@ -106,7 +106,7 @@ def clean_backups(args, log):
         # or one gigantic line
         to_del_list = list(to_delete)
         for delchunk in [','.join(to_del_list[i:i+10]) for \
-                         i in xrange(0, to_del_len, 10)]:
+                         i in range(0, to_del_len, 10)]:
             log.info("Files to delete: %s" % delchunk)
     if args.debug:
         log.debug("%s non-keeper keys to delete", to_del_len)
