@@ -518,7 +518,8 @@ class UploadHandler(pyinotify.ProcessEvent):
                                                        cb=progress, num_cb=1,
                                                        #md5=md5,
                                                        encrypt_key=self.with_sse)
-                    os.remove(tempfilename)
+                    if tempfilename != filename:
+                        os.remove(tempfilename)
                     break
                 except:
                     if not os.path.exists(tempfilename):
