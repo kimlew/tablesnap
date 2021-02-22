@@ -16,18 +16,17 @@
 
 # exit 1 - is Catchall for general errors.
 usage() {
-	cat <<EOF
-usage: $(basename "$0") DIRECTORY TIMEOUT AWS_ACC_KEY_ID AWS_SEC_ACC_KEY
-Checks if inotify notices either an IN_MOVED_TO or an IN_CLOSE_WRITE event,
-to the target directory, /tmp/tablesnap-test.
-Required Arguments:
-- DIRECTORY is the target directory. Creates the directory, if it doesn't already exist.
-- TIMEOUT is the 5 second wait time.
-- AWS_ACC_KEY_ID is the ID needed to access AWS.
-- AWS_SEC_ACC_KEY is the secret key needed to access AWS.
+	cat <<-EOF
+	usage: $(basename "$0") DIRECTORY TIMEOUT AWS_ACC_KEY_ID AWS_SEC_ACC_KEY
+	Checks if inotify notices either an IN_MOVED_TO or an IN_CLOSE_WRITE event,
+	to the target directory, /tmp/tablesnap-test.
+	Required Arguments:
+	- DIRECTORY is the target directory. Creates the directory, if it doesn't already exist.
+	- TIMEOUT is the 5 second wait time.
+	- AWS_ACC_KEY_ID is the ID needed to access AWS.
+	- AWS_SEC_ACC_KEY is the secret key needed to access AWS.
 EOF
   exit 1
-
 }
 
 SUCCESS=0
