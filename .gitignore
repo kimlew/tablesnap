@@ -8,5 +8,6 @@ virtualenv
 
 py27env/
 py36env/
+.idea/
 
 *.bak
