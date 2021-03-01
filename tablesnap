@@ -188,7 +188,7 @@ class UploadHandler(pyinotify.ProcessEvent):
         default_log.info("%s: %s", filename, self.include(filename))
         if self.include is None or (self.include is not None
                                     and self.include(filename)):
-            hardlink_tmp_dir = next((v for k,v in self.hardlink_tmp_map.items() if filename.startswith(k)), self.hardlink_tmp_dir)
+            hardlink_tmp_dir = next((v for k,v in list(self.hardlink_tmp_map.items()) if filename.startswith(k)), self.hardlink_tmp_dir)
             try:
                 self.fileq.put(UploadCounter(filename, hardlink_tmp_dir))
             except Exception as e:
@@ -689,10 +689,10 @@ def main():
         hardlink_tmp_map = {}
         if args.hardlink_tmp_map != '':
             hardlink_tmp_map = json.loads(args.hardlink_tmp_map)
-            for entry_prefix, entry_dir in hardlink_tmp_map.items():
+            for entry_prefix, entry_dir in list(hardlink_tmp_map.items()):
                 if (os.path.exists(entry_dir)):
                     default_log.info('Clearing hardlink tmp dir %s -> %s' % (entry_prefix, entry_dir))
-                    map( os.unlink, [os.path.join(entry_dir,f) for f in os.listdir(entry_dir)] )
+                    list(map( os.unlink, [os.path.join(entry_dir,f) for f in os.listdir(entry_dir)] ))
                 else:
                     default_log.info('Creating hardlink tmp dir %s -> %s' % (entry_prefix, entry_dir))
                     os.makedirs(entry_dir)
