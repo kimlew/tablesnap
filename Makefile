@@ -48,14 +48,15 @@ test_py3.6: docker-py36env # Note: Expect this to FAIL until Python migration ch
 	# docker run -it --mount type=bind,source=$(PWD),target=/tablesnap migrate2to3:v1 ./py36env/bin/python ./tablesnap-sync-manifest --help
 
 DIRECTORY=/tmp/tablesnap-test
-TIMEOUT=5
+TIMEOUT_A=5
+TIMEOUT_B=10
 AWS_ACC_KEY_ID := $(shell aws configure get aws_access_key_id)
 AWS_SEC_ACC_KEY := $(shell aws configure get aws_secret_access_key)
 BUCKET=klew-tablesnap-pymigration
 HARDLINKS_PATH=/tmp/tablesnap-hardlinks
 
 docker-test-tablesnap: docker-build
-	docker run -it --mount type=bind,source=$(PWD),target=/tablesnap migrate2to3:v1 ./test_tablesnap.sh $(DIRECTORY) $(TIMEOUT) $(AWS_ACC_KEY_ID) $(AWS_SEC_ACC_KEY) $(BUCKET) $(HARDLINKS_PATH)
+	docker run -it --mount type=bind,source=$(PWD),target=/tablesnap migrate2to3:v1 ./test_tablesnap.sh $(DIRECTORY) $(TIMEOUT_A) $(TIMEOUT_B) $(AWS_ACC_KEY_ID) $(AWS_SEC_ACC_KEY) $(BUCKET) $(HARDLINKS_PATH)
 
 clean:
 	rm -rf py27env
