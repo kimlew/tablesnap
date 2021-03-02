@@ -245,7 +245,7 @@ class SyncHandler(object):
                          (key.name))
             # work around bug https://github.com/boto/boto/issues/2536
             metadata = {}
-            for k, v in key.metadata.items():
+            for k, v in list(key.metadata.items()):
                 metadata[k] = v.encode('utf8')
 
             mp = to_bucket.initiate_multipart_upload(key.name,
