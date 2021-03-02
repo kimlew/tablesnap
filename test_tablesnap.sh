@@ -3,7 +3,7 @@
 # Script Name: test_tablesnap.sh
 
 # Purpose: This script is called by Makefile, passes in 2 arguments, DIRECTORY
-# (required) and TIMEOUT (optional), runs tablesnap in the background, e.g.,
+# (required) and 2 TIMEOUTs (optional), runs tablesnap in the background, e.g.,
 # ./tablesnap& and tries to generate 1 of 2 events, IN_MOVED_TO or IN_CLOSE_WRITE
 # to a directory, i.e., tries to move or write the file into the directory
 # tablesnap is watching, /tmp/tablesnap-test.
@@ -17,14 +17,17 @@
 # exit 1 - is Catchall for general errors.
 usage() {
 	cat <<-EOF
-	usage: $(basename "$0") DIRECTORY TIMEOUT AWS_ACC_KEY_ID AWS_SEC_ACC_KEY
+	usage: $(basename "$0") DIRECTORY TIMEOUT_A TIMEOUT_B AWS_ACC_KEY_ID AWS_SEC_ACC_KEY BUCKET HARDLINKS_PATH
 	Checks if inotify notices either an IN_MOVED_TO or an IN_CLOSE_WRITE event,
 	to the target directory, /tmp/tablesnap-test.
 	Required Arguments:
 	- DIRECTORY is the target directory. Creates the directory, if it doesn't already exist.
-	- TIMEOUT is the 5 second wait time.
+	- TIMEOUT_A is the 5 sec wait time.
+	- TIMEOUT_B is the 10 sec wait time.
 	- AWS_ACC_KEY_ID is the ID needed to access AWS.
 	- AWS_SEC_ACC_KEY is the secret key needed to access AWS.
+	- BUCKET is the S3 bucket to where the files are moved.
+	- HARDLINKS_PATH is to the directory for temporary hardlinks before they are uploaded to S3.
 EOF
   exit 1
 }
@@ -35,11 +38,12 @@ SUCCESS=0
 # If condition not met, exit script with a general error - to shows help in HERE doc
 # about script usage.
 DIRECTORY=$1
-TIMEOUT=$2
-AWS_ACC_KEY_ID=$3
-AWS_SEC_ACC_KEY=$4
-BUCKET=$5
-HARDLINKS_PATH=$6
+TIMEOUT_A=$2
+TIMEOUT_B=$3
+AWS_ACC_KEY_ID=$4
+AWS_SEC_ACC_KEY=$5
+BUCKET=$6
+HARDLINKS_PATH=$7
 
 # if $# - tells you the number of passed input arguments the script. if $# != 5
 echo "# args passed: $#"
@@ -83,16 +87,17 @@ export TDEBUG=True
 
 # For this tablesnap process running in the background, save the PID  & store
 # as variable, to be used to kill process at script end.
-echo "Waiting ${TIMEOUT} seconds to see IN_MOVED_TO or IN_CLOSE_WRITE event on ${DIRECTORY}"
+echo "Run tablenap. Wait ${TIMEOUT_A} sec to see IN_MOVED_TO or IN_CLOSE_WRITE events on ${DIRECTORY}."
 ./py36env/bin/python ./tablesnap -k "$AWS_ACC_KEY_ID" -s "$AWS_SEC_ACC_KEY" "$BUCKET" "$DIRECTORY" "$HARDLINKS_PATH" &
 TABLESNAP_PID=$!
-sleep "$TIMEOUT"
+sleep "$TIMEOUT_A"
 
 THE_FILE=inotify-test-$(date +%s)
 
+echo "Move files. Wait ${TIMEOUT_B} sec for files to move to ${DIRECTORY}/${THE_FILE}."
 touch /tmp/"${THE_FILE}" > /dev/null
 mv /tmp/"${THE_FILE}" "${DIRECTORY}/${THE_FILE}" > /dev/null
-sleep "$TIMEOUT"
+sleep "$TIMEOUT_B"
 
 # Check if the file is IN the /tmp/tablesnap-test.
 # Need in form: s3://klew-tablesnap-pymigration
