@@ -123,7 +123,7 @@ class SunsetHandler(object):
             key = self.bucket.get_key(key.name)
             # work around bug https://github.com/boto/boto/issues/2536
             metadata = {}
-            for k, v in key.metadata.items():
+            for k, v in list(key.metadata.items()):
                 metadata[k] = v.encode('utf8')
 
             mp = self.sunset_bucket.initiate_multipart_upload(key.name,
