@@ -83,15 +83,15 @@ def clean_backups(args, log):
         fullpaths = [os.path.join(dirname, x) for x in list(jdict.values())[0]]
         keep_jkey = False # assume we are deleting the jkey
         for x in fullpaths:
-            keep_file = True # assume we are keeping the file - this is the
-            # default behavior
+            # assume we are keeping the file - this is the default behavior
+            keep_file = True
             # if we are checking if we should keep existing files
             if args.keep_existing and is_old and not os.path.isfile(x):
                 # don't keep the file if it is old and it does not exist
                 keep_file = False
 
-            keep_jkey = keep_jkey or keep_file  # keep the jkey if we are
-            # keeping any of the files
+            # keep the jkey if we are keeping any of the files
+            keep_jkey = keep_jkey or keep_file
             key_to_keep = '%s:%s' % (args.name, x)
             # if we are keeping the file
             if keep_file and key_to_keep in to_delete:
