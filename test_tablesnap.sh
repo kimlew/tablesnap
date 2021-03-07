@@ -79,8 +79,6 @@ fi
 export AWS_ACCESS_KEY_ID="$AWS_ACC_KEY_ID"
 export AWS_SECRET_ACCESS_KEY="$AWS_SEC_ACC_KEY"
 
-aws s3 ls
-
 echo "My hostname is: $(hostname)"
 
 export TDEBUG=True
